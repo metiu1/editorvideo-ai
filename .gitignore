@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+node_modules/
+
+# interfaccia compilata: si rigenera con `npm run build`
+frontend/dist/
+
+# ambienti virtuali
+.venv/
+venv/
+
+# cache di lavoro: proxy, anteprime, analisi di stabilizzazione
+.vedit/
+
+# permessi locali dell'editor, non riguardano il progetto
+.claude/settings.local.json

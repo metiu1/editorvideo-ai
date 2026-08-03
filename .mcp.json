@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vedit": {
+      "command": "vedit-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

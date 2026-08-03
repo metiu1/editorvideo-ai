@@ -1,0 +1,31 @@
+[project]
+name = "vedit"
+version = "0.1.0"
+description = "Editor video controllabile da MCP, con UI web. Core timeline -> ffmpeg."
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# serve solo per l'assistente dentro la UI; senza, il resto funziona uguale
+chat = ["anthropic>=0.40"]
+
+[project.scripts]
+vedit = "vedit.cli:main"
+vedit-mcp = "vedit.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: esegue ffmpeg per davvero (render reali)"]
