@@ -18,6 +18,7 @@ Note pratiche:
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -35,6 +36,8 @@ DARK_LEVEL = 0.06           # luminanza media normalizzata: sotto e' nero
 BRIGHT_LEVEL = 0.94         # sopra e' bruciato
 FOCUS_FLOOR = 0.25          # fuoco < 25% della mediana della clip = sfocato
 STATS_FPS = 2.0             # campioni al secondo per luminanza/fuoco
+BPM_RANGE = (60.0, 190.0)   # intervallo cercato: sotto e' mezzo tempo, sopra e' doppio
+BEAT_SR = 22050             # frequenza di analisi del battito: basta per l'inviluppo
 
 
 class AnalysisError(RuntimeError):
@@ -170,6 +173,145 @@ def frame_stats(path: str, fps: float = STATS_FPS, width: int = 160,
 # --------------------------------------------------------------------------
 # misure audio
 # --------------------------------------------------------------------------
+
+
+def beats(path: str, block: float = 4.0, force: bool = False) -> dict:
+    """Battito e struttura di una traccia: BPM, griglia dei tempi, energia.
+
+    Montare a tempo vuol dire far cadere gli stacchi sui battiti. Senza questa
+    misura la griglia va calcolata fuori dall'editor e riportata dentro a mano,
+    che e' esattamente il lavoro che un editor dovrebbe togliere.
+
+    Il metodo e' quello classico e volutamente semplice: inviluppo di energia,
+    derivata positiva (gli attacchi), autocorrelazione per trovare il periodo che
+    si ripete. Niente rete neurale, nessuna dipendenza in piu'.
+
+    ``profilo`` da l'energia media per blocchi di ``block`` secondi, normalizzata
+    a 1: e' li' che si leggono intro, stacco e ritornello, cioe' dove far cadere
+    l'apertura e il picco del montaggio.
+    """
+
+    def build() -> dict:
+        try:
+            import numpy as np
+        except ImportError as e:  # pragma: no cover - numpy e' una dipendenza
+            raise AnalysisError("numpy richiesto per l'analisi del battito") from e
+
+        args = [
+            ffmpeg.binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
+            "-i", str(path), "-vn", "-ac", "1", "-ar", str(BEAT_SR), "-f", "s16le", "-",
+        ]
+        raw = (subprocess.run(args, capture_output=True, timeout=3600).stdout or b"")
+        x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if x.size < BEAT_SR:
+            raise AnalysisError("traccia troppo corta o senza audio per il battito")
+
+        hop = 128
+        n = x.size // hop
+        env = np.sqrt((x[: n * hop].reshape(n, hop) ** 2).mean(axis=1))
+        fps = BEAT_SR / hop
+        if env.size < 64:
+            raise AnalysisError("traccia troppo corta per stimare il BPM")
+
+        onset = np.diff(env, prepend=env[0]).clip(min=0)
+        onset = onset - onset.mean()
+
+        # Tempo e fase si cercano insieme, con un pettine: per ogni tempo si
+        # prova ogni fase e si somma l'inviluppo degli attacchi sui punti della
+        # griglia. Il tempo giusto e' quello la cui griglia *cade sui colpi*,
+        # che e' esattamente cio' che serve per montare a tempo.
+        #
+        # Il massimo dell'autocorrelazione, che sarebbe la strada breve, qui non
+        # basta: sbaglia ottava (due battiti si ripetono bene quanto uno) e
+        # soprattutto e' prigioniero della quantizzazione del ritardo, che a
+        # ritardi corti vale l'1-2% — su un montaggio di novanta secondi sono
+        # quasi due misure di deriva. Il pettine lavora a tempo continuo e non
+        # ha quel limite: su una traccia reale separa 160.00 da 161.5 con un
+        # punteggio venti volte piu' alto, dove l'autocorrelazione dava proprio
+        # 161.5.
+        pos = np.arange(onset.size, dtype=np.float64)
+
+        def pettine(bpm_: float, fasi: int) -> tuple[float, float]:
+            p = 60.0 * fps / bpm_
+            colpi = np.arange(0.0, onset.size - 1, p)
+            if colpi.size < 4:
+                return -1.0, 0.0
+            passi = np.arange(0.0, p, p / fasi)
+            idx = np.rint(np.add.outer(passi, colpi)).astype(np.int64)
+            np.clip(idx, 0, onset.size - 1, out=idx)
+            somme = onset[idx].sum(axis=1)
+            j = int(np.argmax(somme))
+            return float(somme[j]), float(passi[j] / fps)
+
+        # passata larga, poi si stringe attorno ai candidati migliori: la
+        # scansione fitta su tutto l'intervallo costerebbe molto di piu' senza
+        # cambiare il risultato
+        larga = np.arange(BPM_RANGE[0], BPM_RANGE[1], 0.5)
+        punti = np.array([pettine(b, 16)[0] for b in larga])
+        migliori = larga[np.argsort(punti)[::-1][:4]]
+
+        bpm, offset, best = float(migliori[0]), 0.0, -1.0
+        for centro in migliori:
+            for b in np.arange(max(BPM_RANGE[0], centro - 0.75),
+                               min(BPM_RANGE[1], centro + 0.75), 0.05):
+                s, off = pettine(float(b), 64)
+                if s > best:
+                    bpm, offset, best = float(b), off, s
+
+        # Il pettine da solo non distingue un tempo dal suo doppio: la griglia
+        # doppia contiene tutti i colpi veri piu' dei punti a vuoto, che
+        # sommano quasi zero, quindi vince per un soffio e la griglia esce con
+        # il doppio dei battiti. Se dimezzare (o dividere per tre) conserva
+        # quasi tutto il punteggio, allora i battiti in piu' erano riempitivo.
+        for _ in range(2):
+            for div in (2, 3):
+                lento = bpm / div
+                if lento < BPM_RANGE[0]:
+                    continue
+                s, off = pettine(lento, 64)
+                if s >= best * 0.85:
+                    bpm, offset, best = lento, off, s
+                    break
+            else:
+                break
+        beat = 60.0 / bpm
+
+        durata = x.size / BEAT_SR
+        b = int(fps * block)
+        profilo = [float(env[i:i + b].mean()) for i in range(0, max(1, env.size - b), b)]
+        top = max(profilo) or 1.0
+        return {
+            "path": str(Path(path).resolve()),
+            "duration": round(durata, 3),
+            "bpm": round(bpm, 2),
+            "beat": round(beat, 6),
+            "bar": round(beat * 4, 6),
+            "offset": round(offset, 4),
+            "profilo": [{"t": round(i * block, 1), "energia": round(v / top, 3)}
+                        for i, v in enumerate(profilo)],
+        }
+
+    return _cached(path, f"beats{block}", build, force)
+
+
+def beat_grid(path: str, start: float = 0.0, end: float | None = None,
+              every: int = 1, force: bool = False) -> list[float]:
+    """Istanti dei battiti tra ``start`` ed ``end``, uno ogni ``every``.
+
+    ``every=4`` da l'inizio di ogni misura in 4/4: e' la griglia su cui far
+    cadere gli stacchi lunghi, mentre ``every=1`` serve per i tagli fitti.
+    """
+    b = beats(path, force=force)
+    fine = b["duration"] if end is None else min(float(end), b["duration"])
+    passo = b["beat"] * max(1, int(every))
+    out, t = [], b["offset"]
+    # ci si allinea al primo battito utile invece di partire da capo ogni volta
+    if t < start:
+        t += math.ceil((start - t) / passo) * passo
+    while t <= fine + 1e-9:
+        out.append(round(t, 4))
+        t += passo
+    return out
 
 
 def silences(path: str, noise_db: float = SILENCE_DB, min_dur: float = SILENCE_MIN,

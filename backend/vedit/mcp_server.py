@@ -152,10 +152,17 @@ def redo(project: str | None = None) -> dict:
 
 
 @mcp.tool()
-async def import_media(paths: list[str], project: str | None = None) -> list[dict]:
-    """Importa file video/audio/immagine nel progetto leggendone i metadati."""
+async def import_media(paths: list[str] | None = None, files: list[str] | None = None,
+                       project: str | None = None) -> list[dict]:
+    """Importa file video/audio/immagine nel progetto leggendone i metadati.
+
+    ``files`` e' accettato come sinonimo di ``paths``: sono lo stesso argomento.
+    """
+    lista = paths if paths is not None else files
+    if not lista:
+        raise EditError("serve paths (o files): la lista dei file da importare")
     s = _store(project)
-    media = await _off(s.import_media, paths)
+    media = await _off(s.import_media, lista)
     return [{"id": m.id, "name": m.name, "kind": m.kind, "duration": m.duration,
              "resolution": f"{m.width}x{m.height}" if m.width else None,
              "fps": m.fps or None, "audio": m.has_audio} for m in media]
@@ -259,6 +266,27 @@ def add_text(text: str, start: float = 0.0, duration: float = 3.0, track: str | 
         border_width=border_width, font_file=font_file,
     )
     return _clip_view(c)
+
+
+@mcp.tool()
+def add_clips(clips: list[dict], track: str | None = None, gap: float = 0.0,
+              project: str | None = None) -> dict:
+    """Mette in timeline una lista di tagli in una chiamata sola.
+
+    Ogni voce e' ``{"media": "<id>", "start": 4.0, "in": 122.5, "duration": 1.5}``:
+    ``start`` assente accoda in fila, ``duration`` assente prende il resto del
+    media, ``track`` per voce se vuoi costruire piu' tracce insieme.
+
+    Usalo *sempre* per un montaggio: una chiamata per taglio significa centinaia
+    di andate e ritorni, altrettanti passi di undo per disfare quello che e' un
+    gesto solo, e mezza timeline costruita se qualcosa si rompe a meta'. Qui o
+    entrano tutti i tagli o non ne entra nessuno.
+
+    Per accodare media *interi* senza ritagliarli c'e' append_sequence.
+    """
+    fatte = _store(project).add_clips(clips, track, gap)
+    return {"aggiunte": len(fatte), "clip": [_clip_view(c) for c in fatte],
+            "fine": round(max((c.start + c.duration for c in fatte), default=0.0), 3)}
 
 
 @mcp.tool()
@@ -450,6 +478,18 @@ def update_effect(index: int, clip: str | None = None, params: dict | None = Non
 
 
 @mcp.tool()
+def move_effect(index: int, to: int, clip: str | None = None,
+                project: str | None = None) -> dict:
+    """Sposta un effetto nella catena: l'ordine cambia il risultato.
+
+    Denoise prima di sharpen pulisce e poi incide; l'ordine opposto incide anche
+    il rumore e poi lo ammorbidisce. Stessi due effetti, immagini diverse.
+    """
+    lst = _store(project).move_effect(clip, index, to)
+    return {"clip": clip, "catena": [e.type for e in lst]}
+
+
+@mcp.tool()
 def remove_effect(index: int, clip: str | None = None, project: str | None = None) -> dict:
     """Rimuove un effetto dalla clip (o dal master se clip=None)."""
     _store(project).remove_effect(clip, index)
@@ -496,15 +536,40 @@ async def audio_levels(clip: str | None = None, project: str | None = None) -> d
 # --------------------------------------------------------------------------
 
 
-def _source(path: str | None, clip: str | None, project: str | None) -> str:
-    """Percorso del file da analizzare, da path esplicito o da una clip."""
+def _e_un_progetto(p: Path) -> bool:
+    """Il file e' un progetto vedit, non del girato."""
+    if p.suffix.lower() != ".json":
+        return False
+    try:
+        with p.open(encoding="utf-8") as f:
+            return '"tracks"' in f.read(4096)
+    except OSError:
+        return False
+
+
+def _source(path: str | None, clip: str | None, project: str | None,
+            media: str | None = None) -> str:
+    """Percorso del file da analizzare: da file, da media importato o da clip.
+
+    Qui ``path`` e' il *file sorgente*, mentre in quasi tutti gli altri strumenti
+    e' il progetto: passare il progetto per sbaglio e' l'errore naturale, e prima
+    finiva dentro ffmpeg producendo un ``Invalid data found when processing
+    input`` che non dice niente. Adesso lo si riconosce e lo si spiega.
+    """
     if path:
         p = Path(path)
         if not p.exists():
             raise EditError(f"file non trovato: {path}")
+        if _e_un_progetto(p):
+            raise EditError(
+                f"{p.name} e' un progetto, non del girato: qui 'path' vuole il file "
+                "sorgente. Indica il materiale con media='<id>' oppure clip='<id>' "
+                "e passa il progetto in 'project'.")
         return str(p.resolve())
+    if media:
+        return _store(project).media_or_die(media).path
     if not clip:
-        raise EditError("serve path oppure clip")
+        raise EditError("serve path (file sorgente), media oppure clip")
     s = _store(project)
     _, c = s.clip_or_die(clip)
     if not c.media:
@@ -514,10 +579,14 @@ def _source(path: str | None, clip: str | None, project: str | None) -> str:
 
 @mcp.tool()
 async def inspect_footage(path: str | None = None, clip: str | None = None,
-                          deep: bool = False, model: str = "small",
-                          language: str | None = None,
+                          media: str | None = None, deep: bool = False,
+                          model: str = "small", language: str | None = None,
                           project: str | None = None) -> dict:
     """Che cosa c'e' dentro il girato: tagli, silenzi, buio, fuori fuoco, verdetto.
+
+    Il materiale si indica in tre modi: ``path`` = **file sorgente su disco**
+    (non il progetto), ``media`` = id di un media gia' importato, ``clip`` = id
+    di una clip in timeline.
 
     Ritorna verdict = keep | trim | drop, gli ``issues`` che lo giustificano e
     suggested_in/out per accorciare. deep=True aggiunge la trascrizione (piu'
@@ -525,8 +594,34 @@ async def inspect_footage(path: str | None = None, clip: str | None = None,
 
     Serve prima di montare: dice quali clip scartare e dove tagliarle.
     """
-    src = _source(path, clip, project)
+    src = _source(path, clip, project, media)
     return await _off(analyze.report, src, deep, model_size=model, language=language)
+
+
+@mcp.tool()
+async def music_beats(path: str | None = None, clip: str | None = None,
+                      media: str | None = None, start: float = 0.0,
+                      end: float | None = None, every: int = 0,
+                      project: str | None = None) -> dict:
+    """Battito e struttura di una traccia: BPM, griglia dei tempi, energia.
+
+    Montare a tempo vuol dire far cadere gli stacchi sui battiti, e per farlo
+    serve sapere dove sono. Ritorna ``bpm``, la durata di un battito (``beat``)
+    e di una misura in 4/4 (``bar``), lo scostamento del primo battito
+    (``offset``) e ``profilo``, l'energia per blocchi di 4 secondi normalizzata
+    a 1: e' li' che si leggono intro, stacco e ritornello, cioe' dove mettere
+    l'apertura e il picco.
+
+    Con ``every`` > 0 aggiunge ``griglia``, gli istanti veri su cui tagliare:
+    ``every=1`` ogni battito (tagli fitti), ``every=4`` ogni misura, ``every=8``
+    ogni due misure. Limitala con start/end, altrimenti su un brano lungo sono
+    migliaia di numeri.
+    """
+    src = _source(path, clip, project, media)
+    out = dict(await _off(analyze.beats, src))
+    if every > 0:
+        out["griglia"] = await _off(analyze.beat_grid, src, start, end, every)
+    return out
 
 
 @mcp.tool()
@@ -561,12 +656,17 @@ async def list_styles() -> dict:
 async def plan_edit(folder: str | None = None, files: list[str] | None = None,
                     style: str = "vlog", target_duration: float | None = None,
                     deep: bool = False, apply: bool = False, order: str = "score",
-                    project: str | None = None) -> dict:
+                    segment: bool = True, project: str | None = None) -> dict:
     """Da una cartella di girato alla scaletta: cosa entra, in che ordine, per quanto.
 
     Analizza tutto il materiale, scarta l'inutilizzabile e i doppioni, ordina
     secondo l'arco (apertura, salita, picco al 75%, chiusura) ed evita due
     inquadrature simili di fila. Ogni clip esce con il suo *perche'*.
+
+    Le riprese lunghe vengono **spezzate nei loro tratti** e valutate a tratti,
+    non a file: da tre minuti di ripresa continua escono decine di candidati con
+    un punto d'attacco vero, invece di un punteggio solo per tutto il file.
+    ``segment=False`` torna a un'inquadratura per file.
 
     style: shortform | vlog | documentary | cinematic (vedi list_styles).
     order: score (per punteggio) | chrono (data di ripresa vera, letta dai tag
@@ -580,7 +680,7 @@ async def plan_edit(folder: str | None = None, files: list[str] | None = None,
     src = files if files else folder
     if not src:
         raise EditError("serve folder oppure files")
-    p = await _off(story.plan, src, style, target_duration, deep, True, order)
+    p = await _off(story.plan, src, style, target_duration, deep, True, order, segment)
     if apply:
         p["applicato"] = story.apply_plan(_store(project), p)
     return p
@@ -719,16 +819,23 @@ async def censor_speech(clip: str, words: list[str] | None = None,
 
 
 @mcp.tool()
-async def preview_frame(t: float, width: int = 640, path: str | None = None,
-                        project: str | None = None) -> Image:
+async def preview_frame(t: float | None = None, width: int = 640, path: str | None = None,
+                        time: float | None = None, project: str | None = None) -> Image:
     """Renderizza il fotogramma della timeline al tempo ``t`` e lo restituisce.
 
     E' il modo per *vedere* il montaggio: posizione degli overlay, testo,
     correzione colore, inquadratura. Usa build_proxies per renderlo piu' rapido.
+
+    ``time`` e' accettato come sinonimo di ``t``. Alza ``width`` a 1280 o 1920
+    quando devi giudicare un dettaglio piccolo — la posizione di una maschera, un
+    testo, il fuoco: a 640 px certe cose semplicemente non si vedono.
     """
+    quando = t if t is not None else time
+    if quando is None:
+        raise EditError("serve t: il tempo in secondi sulla timeline")
     s = _store(project)
     out = path or str(Path(tempfile.gettempdir()) / f"vedit_preview_{os.getpid()}.jpg")
-    p = await _off(render.render_frame, s.project, t, out, width, True)
+    p = await _off(render.render_frame, s.project, float(quando), out, width, True)
     return Image(path=p)
 
 

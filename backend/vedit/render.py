@@ -51,6 +51,9 @@ class RenderOptions:
     end: float | None = None
     use_proxy: bool = False
     prefer_hw: bool = True
+    # Decodifica accelerata: si spegne da sola al primo ripiego, tenendo pero'
+    # l'encoder GPU. Sono due meta' separabili e non valgono lo stesso.
+    hwaccel_decode: bool = True
     video: bool = True
     audio: bool = True
     threads: int | None = None
@@ -168,7 +171,7 @@ def build_command(project: Project, opts: RenderOptions, workdir: Path) -> tuple
         width=opts.width, height=opts.height, fps=opts.fps,
         use_proxy=opts.use_proxy, audio=want_audio, video=want_video,
         start=opts.start, end=opts.end, workdir=str(workdir),
-        hwaccel=info.hwaccel if (opts.prefer_hw and info.is_hw(enc)) else "",
+        hwaccel=info.hwaccel if (opts.prefer_hw and opts.hwaccel_decode and info.is_hw(enc)) else "",
         stab_files=stab,
     )
     c = compile_project(project, copts)
@@ -237,6 +240,26 @@ def _run_pass(args: list[str], duration: float, on_progress: Progress | None,
     return proc.wait(), log_lines
 
 
+# Righe di contorno: dicono che qualcosa e' andato storto, non che cosa.
+_RUMORE = ("Error sending frames", "Task finished with error", "Terminating thread",
+           "Could not open encoder before EOF", "Nothing was written into output",
+           "Conversion failed", "Error while filtering")
+
+
+def _perche(log_lines: list[str]) -> str:
+    """La riga di ffmpeg che spiega davvero il fallimento, per il messaggio.
+
+    Senza questo il ripiego era muto: si sapeva che la GPU non era stata usata,
+    mai perche'. Una diagnosi come ``no encode device`` cambia cosa si va a
+    guardare, quindi va portata a galla invece di finire nel niente.
+    """
+    utile = [r for r in log_lines if r.strip() and not any(n in r for n in _RUMORE)]
+    if not utile:
+        return ""
+    riga = re.sub(r"@ [0-9a-fx]+ ", "", utile[0]).strip()
+    return f" ({riga[:160]})"
+
+
 def render(project: Project, opts: RenderOptions, on_progress: Progress | None = None) -> RenderResult:
     if not opts.output:
         raise ValueError("percorso di output mancante")
@@ -248,20 +271,35 @@ def render(project: Project, opts: RenderOptions, on_progress: Progress | None =
     try:
         args, duration, warnings, enc = build_command(project, opts, workdir)
         code, log_lines = _run_pass(args, duration, on_progress, t0)
+        warnings = list(warnings)
 
         # L'accelerazione hardware e' un'ottimizzazione: non vale un render
         # perso. La GPU puo' mancare al momento giusto — device che non nasce,
         # sessioni dell'encoder gia' tutte occupate da altri processi, driver
         # che cede sotto carico — e ffmpeg non se ne accorge con grazia: esce
-        # di schianto. Il ripiego rifa' *tutto* in software, decodifica e
-        # codifica insieme: ripetere con lo stesso encoder GPU quando e' la GPU
-        # a essere il problema significa fallire due volte.
-        if code != 0 and opts.prefer_hw and ("-hwaccel" in args or hw.detect().is_hw(enc)):
-            warnings = list(warnings) + [
-                "accelerazione hardware fallita: rifatto in software (piu' lento)"
-            ]
+        # di schianto.
+        #
+        # Si ripiega pero' a gradini, non tutto in una volta: le due meta'
+        # dell'accelerazione non valgono lo stesso e non falliscono insieme. Il
+        # caso tipico e' la coppia che non regge — decodifica accelerata che
+        # crea il device sull'adattatore sbagliato e ne fa morire l'encoder —
+        # dove basta togliere la decodifica per riavere il render su GPU.
+        # Buttare subito anche l'encoder e' quello che trasformava trenta
+        # secondi di render in tre minuti, senza dirlo.
+        if code != 0 and opts.prefer_hw and "-hwaccel" in args:
+            warnings.append(
+                "decodifica accelerata fallita: rifatto senza, encoder GPU mantenuto"
+                + _perche(log_lines))
             args, duration, _, enc = build_command(
-                project, replace(opts, prefer_hw=False), workdir)
+                project, replace(opts, hwaccel_decode=False), workdir)
+            code, log_lines = _run_pass(args, duration, on_progress, t0)
+
+        if code != 0 and opts.prefer_hw and hw.detect().is_hw(enc):
+            warnings.append(
+                "accelerazione hardware fallita: rifatto in software (piu' lento)"
+                + _perche(log_lines))
+            args, duration, _, enc = build_command(
+                project, replace(opts, prefer_hw=False, hwaccel_decode=False), workdir)
             code, log_lines = _run_pass(args, duration, on_progress, t0)
 
         if code != 0:

@@ -13,6 +13,7 @@ import json
 import os
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,7 @@ class Store:
         self.autosave = autosave
         self._undo: list[dict] = []
         self._redo: list[dict] = []
+        self._batch = 0
 
     # ---- ciclo di vita -------------------------------------------------
     @classmethod
@@ -131,14 +133,53 @@ class Store:
     # ---- undo/redo -----------------------------------------------------
     def _touch(self) -> None:
         """Da chiamare *prima* di ogni mutazione."""
+        if self._batch:
+            return          # dentro un blocco lo snapshot e' gia' stato preso
         self._undo.append(self.project.to_dict())
         if len(self._undo) > MAX_HISTORY:
             self._undo.pop(0)
         self._redo.clear()
 
     def _done(self) -> None:
+        if self._batch:
+            return          # si salva una volta sola, alla chiusura del blocco
         if self.autosave and self.path:
             self.save()
+
+    @contextmanager
+    def batch(self):
+        """Piu' operazioni come una sola modifica: un undo, un salvataggio.
+
+        Costruire un montaggio serrato vuol dire centinaia di chiamate. Una per
+        una diventano centinaia di snapshot dell'intero progetto e altrettanti
+        salvataggi su disco — lento — e soprattutto centinaia di passi di undo
+        per disfare quello che per chi monta e' un gesto solo.
+
+        Il blocco e' anche atomico: se una chiamata a meta' fallisce si torna
+        com'era, invece di lasciare in timeline mezzo montaggio da ripulire a
+        mano.
+        """
+        if self._batch:
+            self._batch += 1
+            try:
+                yield self
+            finally:
+                self._batch -= 1
+            return
+
+        self._undo.append(self.project.to_dict())
+        if len(self._undo) > MAX_HISTORY:
+            self._undo.pop(0)
+        self._redo.clear()
+        self._batch = 1
+        try:
+            yield self
+        except Exception:
+            self.project = Project.from_obj(self._undo.pop())
+            raise
+        finally:
+            self._batch = 0
+        self._done()
 
     def undo(self) -> bool:
         if not self._undo:
@@ -497,7 +538,7 @@ class Store:
             if v is None:
                 continue
             kf.validate(v)
-            setattr(clip.transform, k, v)
+            setattr(clip.transform, k, kf.coerce(v))
         self._done()
         return clip
 
@@ -512,7 +553,7 @@ class Store:
             if v is None:
                 continue
             kf.validate(v)
-            setattr(clip.audio, k, v)
+            setattr(clip.audio, k, kf.coerce(v))
         self._done()
         return clip
 
@@ -619,18 +660,76 @@ class Store:
         lst.pop(index)
         self._done()
 
+    def move_effect(self, clip_id: str | None, index: int, to: int) -> list[Effect]:
+        """Sposta un effetto nella catena: l'ordine cambia il risultato.
+
+        Non e' un dettaglio estetico. Denoise prima di sharpen pulisce e poi
+        incide; sharpen prima di denoise incide anche il rumore e poi lo
+        ammorbidisce — stessa coppia, immagini diverse. Senza questo metodo
+        l'unico modo di correggere l'ordine era togliere gli effetti e rimetterli
+        tutti in fila.
+        """
+        lst = self._effect_list(clip_id)
+        n = len(lst)
+        if not (0 <= index < n):
+            raise EditError(f"indice effetto {index} fuori range (0..{n - 1})")
+        to = max(0, min(int(to), n - 1))
+        if to == index:
+            return lst
+        self._touch()
+        lst.insert(to, lst.pop(index))
+        self._done()
+        return lst
+
     # ---- montaggio -----------------------------------------------------
     def append_sequence(self, media_ids: list[str], track_id: str | None = None,
                         crossfade: float = 0.0) -> list[Clip]:
-        """Mette in fila piu' media, con dissolvenza incrociata opzionale."""
-        clips = []
-        for mid in media_ids:
-            c = self.add_clip(mid, track_id)
-            clips.append(c)
-        if crossfade > 0:
-            for a, b in zip(clips, clips[1:]):
-                self.crossfade(a.id, b.id, crossfade)
+        """Mette in fila piu' media interi, con dissolvenza incrociata opzionale.
+
+        Prende i media *per intero*: per una lista di tagli con punto d'attacco
+        e durata serve :meth:`add_clips`.
+        """
+        with self.batch():
+            clips = [self.add_clip(mid, track_id) for mid in media_ids]
+            if crossfade > 0:
+                for a, b in zip(clips, clips[1:]):
+                    self.crossfade(a.id, b.id, crossfade)
         return clips
+
+    def add_clips(self, items: list[dict], track_id: str | None = None,
+                  gap: float = 0.0) -> list[Clip]:
+        """Mette in timeline una lista di tagli in una sola modifica.
+
+        Ogni voce e' ``{"media": id, "in": s, "duration": s, "start": s}``:
+        ``start`` assente accoda in fila (rispettando ``gap``), ``duration``
+        assente prende il resto del media. Accetta anche ``track`` per voce, per
+        costruire piu' tracce in un colpo.
+
+        Serve perche' un montaggio serrato e' fatto di decine o centinaia di
+        tagli: metterli uno alla volta e' lento, riempie la cronologia di undo e
+        soprattutto lascia mezza timeline costruita se qualcosa va storto a
+        meta'. Qui o entrano tutti o non entra niente.
+        """
+        if not items:
+            return []
+        for i, it in enumerate(items):
+            if not it.get("media"):
+                raise EditError(f"voce {i}: manca 'media'")
+
+        out: list[Clip] = []
+        with self.batch():
+            for it in items:
+                dove = it.get("track", track_id)
+                start = it.get("start")
+                if start is None:
+                    tr = self.track_for_edit(dove or self._default_track(
+                        "audio" if self.media_or_die(it["media"]).kind == "audio" else "video"))
+                    start = self.track_end(tr) + (gap if tr.clips else 0.0)
+                out.append(self.add_clip(
+                    it["media"], dove, float(start),
+                    float(it.get("in", it.get("in_", 0.0)) or 0.0),
+                    it.get("duration"), it.get("name")))
+        return out
 
     def crossfade(self, clip_a: str, clip_b: str, duration: float = 1.0,
                   type: str = "dissolve") -> dict:

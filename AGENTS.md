@@ -135,14 +135,49 @@ Se hai installato con `--venv`, al posto di `vedit-mcp` va il percorso assoluto
 Flusso tipico degli strumenti:
 
 ```
-project_create -> import_media -> add_clip / add_text -> modifiche (split, set_speed,
-add_effect, set_transform) -> preview_frame per guardare il fotogramma -> render_video
+project_create -> import_media -> add_clip / add_clips / add_text -> modifiche (split,
+set_speed, add_effect, set_transform) -> preview_frame per guardare il fotogramma -> render_video
 ```
 
 `preview_frame` restituisce **l'immagine vera**: guardala invece di dare per scontato il
 risultato. I tempi sono in secondi. Ogni parametro animabile accetta anche un blocco keyframe
 `{"kf": [{"t": 0, "v": 0}, {"t": 2, "v": 1, "ease": "ease_in_out"}]}` con `t` relativo
 all'inizio della clip. `project_info` dà lo stato della timeline con gli id.
+
+### Montare tanti tagli
+
+Un montaggio serrato è fatto di decine o centinaia di tagli: **usa `add_clips`**, che li mette
+tutti in una chiamata sola. Una chiamata per taglio è lenta, riempie la cronologia di undo per
+quello che è un gesto solo, e se qualcosa si rompe a metà lascia mezza timeline costruita.
+`add_clips` è atomico: o entrano tutti o non entra nessuno. `append_sequence` serve solo per
+accodare media *interi*, senza punto d'attacco.
+
+```json
+[{"media": "m1b1a", "start": 0.0,   "in": 122.5, "duration": 1.5},
+ {"media": "m9155", "start": 1.5,   "in": 98.5,  "duration": 0.75}]
+```
+
+### Montare a tempo di musica
+
+`music_beats` dà BPM, durata di battito e battuta, scostamento del primo battito e il profilo
+di energia per blocchi di 4 secondi — cioè dove stanno intro, stacco e ritornello. Con
+`every=1|4|8` restituisce anche `griglia`, gli istanti veri su cui far cadere gli stacchi.
+**Non stimare il tempo a occhio:** un errore dell'1% su novanta secondi è quasi una battuta di
+deriva, e gli stacchi finiscono progressivamente fuori tempo.
+
+### Scegliere il materiale
+
+`plan_edit` spezza le riprese più lunghe di 12 secondi nei loro tratti e le valuta a tratti, non
+a file: da tre minuti di ripresa continua escono decine di candidati con un punto d'attacco
+vero. Leggi il piano prima di applicarlo (`apply=True` costruisce davvero la timeline).
+
+Per guardare il girato prima di montarlo: `inspect_footage` vuole il **file sorgente** in
+`path`, oppure `media=` / `clip=`; il progetto va sempre in `project=`. `preview_grid` mostra
+tutto il montaggio insieme ed è il modo più rapido per accorgersi che un punto d'attacco è
+caduto sull'inquadratura sbagliata.
+
+L'ordine degli effetti conta e si cambia con `move_effect`: denoise prima di sharpen pulisce e
+poi incide, l'ordine opposto incide anche il rumore.
 
 **Un progetto alla volta per file.** UI e server MCP salvano da soli dopo ogni modifica: se lo
 stesso `.json` è aperto in tutti e due, l'ultimo che salva vince. Non c'è un lock.

@@ -173,3 +173,28 @@ def validate(value: Any) -> None:
         ease = str(k.get("ease", "linear"))
         if ease not in EASINGS:
             raise ValueError(f"easing sconosciuto {ease!r}, attesi: {', '.join(EASINGS)}")
+
+
+def coerce(value: Any) -> Any:
+    """Riporta a numero un valore animabile arrivato come stringa.
+
+    Un parametro animabile accetta sia un numero sia un blocco keyframe, quindi
+    non puo' essere dichiarato ``float`` nello schema degli strumenti: un client
+    che manda ``"-3"`` invece di ``-3`` scrive una stringa nel progetto. Alla
+    lettura funziona lo stesso, perche' la conversione avviene li', ma il file
+    finisce con tipi diversi per lo stesso campo e chi lo rilegge — la UI, un
+    diff, un altro agente — trova ``"gain_db": "-3"`` accanto a ``"gain_db": 0.0``.
+    """
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if isinstance(value, dict) and isinstance(value.get("kf"), list):
+        out = dict(value)
+        out["kf"] = [{**k, **{c: coerce(k[c]) for c in ("t", "v") if c in k}}
+                     for k in value["kf"] if isinstance(k, dict)]
+        return out
+    return value

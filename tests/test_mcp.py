@@ -148,3 +148,85 @@ async def test_project_open_rilegge_da_disco(assets, tmp_path):
 
     await call("project_open", path=p)
     assert _tracks(await call("project_info")) == []
+
+
+@pytest.mark.anyio
+async def test_add_clips_monta_in_una_chiamata(assets, tmp_path):
+    """Un montaggio serrato deve entrare con una chiamata, non con una per taglio."""
+    await call("project_create", path=str(tmp_path / "p.json"), preset="720p")
+    red, blue = [m["id"] for m in await call(
+        "import_media", paths=[assets["red"], assets["blue"]])]
+
+    res = await call("add_clips", clips=[
+        {"media": red, "start": 0.0, "in": 1.0, "duration": 0.5},
+        {"media": blue, "start": 0.5, "in": 0.5, "duration": 0.75},
+        {"media": red, "start": 1.25, "in": 3.0, "duration": 0.5},
+    ])
+    assert res["aggiunte"] == 3
+    assert res["fine"] == pytest.approx(1.75)
+
+    clips = _tracks(await call("project_info"))
+    assert [c["in"] for c in clips] == [1.0, 0.5, 3.0]
+
+    # tre tagli restano una modifica sola: un undo li toglie tutti
+    await call("undo")
+    assert _tracks(await call("project_info")) == []
+
+
+@pytest.mark.anyio
+async def test_add_clips_non_lascia_montaggi_a_meta(assets, tmp_path):
+    await call("project_create", path=str(tmp_path / "p.json"), preset="720p")
+    red = (await call("import_media", paths=[assets["red"]]))[0]["id"]
+    with pytest.raises(ToolError):
+        await call("add_clips", clips=[
+            {"media": red, "duration": 1.0},
+            {"media": "fantasma", "duration": 1.0},
+        ])
+    assert _tracks(await call("project_info")) == []
+
+
+@pytest.mark.anyio
+async def test_move_effect_riordina(assets, tmp_path):
+    await call("project_create", path=str(tmp_path / "p.json"), preset="720p")
+    await call("add_effect", type="sharpen", params={"amount": 1.0})
+    await call("add_effect", type="denoise", params={"strength": 3})
+    res = await call("move_effect", index=1, to=0)
+    assert res["catena"] == ["denoise", "sharpen"]
+
+
+@pytest.mark.anyio
+async def test_music_beats(assets, tmp_path):
+    await call("project_create", path=str(tmp_path / "p.json"))
+    b = await call("music_beats", path=assets["music"], every=4, end=4.0)
+    assert b["bpm"] > 0
+    assert b["beat"] == pytest.approx(60.0 / b["bpm"], abs=1e-3)
+    assert b["bar"] == pytest.approx(b["beat"] * 4, abs=1e-3)
+    assert b["profilo"], "senza profilo non si trova lo stacco"
+    assert b["griglia"] and all(t <= 4.0 for t in b["griglia"])
+
+
+@pytest.mark.anyio
+async def test_analisi_su_un_progetto_lo_dice(assets, tmp_path):
+    """Passare il progetto dove va il girato e' l'errore naturale: va spiegato."""
+    p = str(tmp_path / "p.json")
+    await call("project_create", path=p)
+    with pytest.raises(ToolError, match="e' un progetto, non del girato"):
+        await call("inspect_footage", path=p)
+
+
+@pytest.mark.anyio
+async def test_inspect_footage_accetta_un_media(assets, tmp_path):
+    await call("project_create", path=str(tmp_path / "p.json"))
+    m = (await call("import_media", paths=[assets["red"]]))[0]
+    rep = await call("inspect_footage", media=m["id"])
+    assert rep["verdict"] in ("keep", "trim", "drop")
+
+
+@pytest.mark.anyio
+async def test_sinonimi_degli_argomenti(assets, tmp_path):
+    """files/paths e time/t sono lo stesso argomento: sbagliarlo non deve fermare."""
+    await call("project_create", path=str(tmp_path / "p.json"), preset="720p")
+    media = await call("import_media", files=[assets["red"]])
+    await call("add_clip", media=media[0]["id"], duration=1.0)
+    r = await srv.mcp.call_tool("preview_frame", {"time": 0.5, "width": 160})
+    assert not r.is_error

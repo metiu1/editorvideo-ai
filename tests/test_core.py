@@ -269,18 +269,22 @@ def test_mp3_con_copertina_resta_audio(audio_con_copertina, tmp_path):
 
 
 # ---------------------------------------------------------------- hardware
-def test_hwaccel_ripiega_su_software(assets, tmp_path, monkeypatch):
-    """Se la decodifica accelerata cede, il render finisce lo stesso.
+def test_hwaccel_ripiega_ma_tiene_l_encoder(assets, tmp_path, monkeypatch):
+    """Se la decodifica accelerata cede, cade solo lei: il render finisce lo stesso.
 
     L'accelerazione e' un'ottimizzazione e va trattata come tale: il device
     hardware puo' non nascere (driver occupato, troppi contesti aperti) e
     ffmpeg in quel caso non fallisce con grazia, esce di schianto. Prima
     questo portava via l'export intero.
+
+    Le due meta' pero' si buttano separatamente. Qui a non reggere e' solo la
+    decodifica, quindi il ripiego deve fermarsi al primo gradino e tenere
+    l'encoder: scendere subito in software e' il motivo per cui ogni render
+    finiva sulla CPU anche quando la GPU stava benissimo.
     """
     from vedit import hw
 
-    # libx264 dichiarato "hardware" e un metodo di decodifica inesistente: cosi'
-    # la strada accelerata viene presa e fallisce ovunque, GPU o no
+    # encoder buono, metodo di decodifica inesistente: cede solo la decodifica
     monkeypatch.setattr(hw, "detect", lambda force=False: hw.HWInfo(
         encoders={"h264": "libx264"}, working=["libx264"], hwaccel="nonesiste"))
 
@@ -294,4 +298,7 @@ def test_hwaccel_ripiega_su_software(assets, tmp_path, monkeypatch):
 
     assert res.size > 0
     assert "-hwaccel" not in res.command          # il secondo giro l'ha tolto
-    assert any("software" in w for w in res.warnings)
+    assert res.encoder == "libx264"               # l'encoder resta quello scelto
+    assert any("decodifica accelerata" in w for w in res.warnings)
+    assert not any("software" in w for w in res.warnings), \
+        "e' caduta solo la decodifica: non c'era motivo di rifare tutto in software"

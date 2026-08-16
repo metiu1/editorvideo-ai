@@ -160,6 +160,162 @@ def shot_from(path: str, style: Style, deep: bool = False, **kw) -> Shot:
 
 
 # --------------------------------------------------------------------------
+# dal file all'inquadratura: spezzare le riprese lunghe
+# --------------------------------------------------------------------------
+
+# Sotto questa durata un file e' gia' un'inquadratura sola e non si tocca.
+SEGMENT_OVER = 12.0
+
+
+def segment_bounds(path: str, style: Style, duration: float) -> list[tuple[float, float]]:
+    """Divide una ripresa lunga nei tratti che potrebbero diventare inquadrature.
+
+    Un file non e' un'inquadratura. Su una ripresa continua di tre minuti —
+    bodycam, intervista, drone, una GoPro lasciata accesa — valutare il file
+    intero da un punteggio solo per centottanta secondi che contengono di tutto,
+    e qualunque scelta ne discenda e' un caso. Il montaggio si fa sui tratti.
+
+    I confini arrivano dai cambi di inquadratura quando ci sono; dove la ripresa
+    e' continua si taglia a finestre regolari, perche' e' meglio avere trenta
+    candidati misurati male ai bordi che uno solo misurato bene e inutilizzabile.
+    """
+    target = max(style.shot_max * 2.0, 4.0)
+    cuts = [t for t in analyze.scenes(path) if 0.0 <= t < duration]
+    bordi = sorted(set([0.0] + cuts + [duration]))
+
+    out: list[tuple[float, float]] = []
+    for a, b in zip(bordi, bordi[1:]):
+        span = b - a
+        if span < style.shot_min:
+            continue
+        n = max(1, round(span / target))
+        passo = span / n
+        for i in range(n):
+            s = a + i * passo
+            e = min(b, s + passo)
+            if e - s >= style.shot_min:
+                out.append((round(s, 3), round(e, 3)))
+    return out
+
+
+def _window(stats: list[dict], a: float, b: float) -> list[dict]:
+    return [s for s in stats if a <= s["t"] < b]
+
+
+def shot_in_window(path: str, a: dict, style: Style, start: float, end: float,
+                   deep: bool = False) -> Shot:
+    """Misura un singolo tratto di un file gia' analizzato.
+
+    Riusa le misure del file (campioni, silenzi, tratti morti, cambi scena) che
+    sono in cache: spezzare in trenta candidati non costa trenta analisi.
+    """
+    dur = max(1e-6, end - start)
+    stats = _window(a.get("stats") or [], start, end)
+    dead = a.get("dead") or {}
+
+    black = analyze._cover(dead.get("black"), start, end) / dur
+    freeze = analyze._cover(dead.get("freeze"), start, end) / dur
+    silence = analyze._cover(a.get("silences"), start, end) / dur
+
+    dark = bright = blurry = 0.0
+    if stats:
+        tutti = sorted(s["focus"] for s in (a.get("stats") or []))
+        med = tutti[len(tutti) // 2] if tutti else 0.0
+        quota = 1.0 / len(stats)
+        for s in stats:
+            if s["brightness"] < analyze.DARK_LEVEL:
+                dark += quota
+            elif s["brightness"] > analyze.BRIGHT_LEVEL:
+                bright += quota
+            if med > 0 and s["focus"] < med * analyze.FOCUS_FLOOR:
+                blurry += quota
+
+    quality = max(0.0, 1.0 - (black + freeze + blurry + 0.5 * dark + 0.5 * bright))
+    fp = fingerprint(stats)
+    motion = fp[6] * 6 if len(fp) > 6 else 0.0
+    cuts = sum(1 for t in (a.get("scenes") or []) if start < t < end)
+    energy = min(1.0, motion + 0.08 * cuts)
+    speech = min(1.0, (1.0 - silence) * 0.9) if a.get("has_audio") else 0.0
+
+    score = (style.speech_weight * speech + style.motion_weight * energy
+             + 1.2 * quality) / (style.speech_weight + style.motion_weight + 1.2)
+
+    issues = []
+    if black + freeze > 0.5:
+        issues.append("tratto nero o congelato")
+    if blurry > 0.6:
+        issues.append("fuori fuoco")
+    if dark > 0.6:
+        issues.append("sottoesposto")
+    elif bright > 0.6:
+        issues.append("bruciato")
+    verdict = "drop" if (black + freeze > 0.6 or blurry > 0.7 or quality < 0.35) else "keep"
+
+    return Shot(
+        path=a["path"], duration=float(a["duration"]), in_=start, out=end,
+        score=round(score, 4), energy=round(energy, 4), speech=round(speech, 4),
+        quality=round(quality, 4), verdict=verdict, issues=issues, fingerprint=fp,
+    )
+
+
+def shots_from(path: str, style: Style, deep: bool = False, **kw) -> list[Shot]:
+    """Tutti i tratti utilizzabili di un file, gia' misurati.
+
+    Un file corto resta una clip sola: e' gia' un'inquadratura. Uno lungo esce
+    spezzato, ed e' li' che il montaggio diventa possibile.
+    """
+    rep = analyze.report(path, deep=deep, **kw)
+    if rep["verdict"] == "drop" or rep["duration"] <= SEGMENT_OVER:
+        return [shot_from(path, style, deep=deep, **kw)]
+
+    a = analyze.analyze(path, deep=False)
+    tratti = segment_bounds(path, style, rep["duration"])
+    if not tratti:
+        return [shot_from(path, style, deep=deep, **kw)]
+    return [shot_in_window(path, a, style, s, e, deep) for s, e in tratti]
+
+
+def select(shots: list[Shot], style: Style, target: float | None,
+           per_file_max: int | None = None) -> tuple[list[Shot], list[Shot]]:
+    """Da tanti candidati ai pochi che entrano davvero, senza svuotare un file.
+
+    Con le riprese spezzate i candidati diventano centinaia: prenderli tutti
+    darebbe un video lungo dieci volte il richiesto, e prendere solo i primi per
+    punteggio significa pescarli tutti dalla stessa ripresa, quella girata
+    meglio. Si tiene quindi il meglio con un tetto per file, e si torna
+    all'ordine di partenza.
+    """
+    if not shots:
+        return [], []
+    medio = (style.shot_min + style.shot_max) / 2
+    quanti = (max(1, round(target / medio)) if target
+              else min(40, max(1, 3 * len({s.path for s in shots}))))
+    if quanti >= len(shots):
+        return list(shots), []
+
+    files = len({s.path for s in shots})
+    tetto = per_file_max or max(1, math.ceil(quanti / files * 1.6))
+
+    posizione = {id(s): i for i, s in enumerate(shots)}
+    presi: list[Shot] = []
+    usati: dict[str, int] = {}
+    for s in sorted(shots, key=lambda x: -x.score):
+        if len(presi) >= quanti:
+            break
+        if usati.get(s.path, 0) >= tetto:
+            continue
+        usati[s.path] = usati.get(s.path, 0) + 1
+        presi.append(s)
+
+    presi.sort(key=lambda s: posizione[id(s)])
+    dentro = {id(s) for s in presi}
+    scartati = [s for s in shots if id(s) not in dentro]
+    for s in scartati:
+        s.reason = s.reason or "non entra nella durata richiesta"
+    return presi, scartati
+
+
+# --------------------------------------------------------------------------
 # regole di montaggio
 # --------------------------------------------------------------------------
 
@@ -314,7 +470,8 @@ def collect(folder: str, order: str = "name") -> list[str]:
 
 
 def plan(source: str | list[str], style: str = "vlog", target_duration: float | None = None,
-         deep: bool = False, dedupe: bool = True, order: str = "score", **kw) -> dict:
+         deep: bool = False, dedupe: bool = True, order: str = "score",
+         segment: bool = True, **kw) -> dict:
     """Dal materiale grezzo alla scaletta: cosa entra, in che ordine, per quanto.
 
     ``source`` e' una cartella o una lista di file. Ritorna un piano leggibile,
@@ -331,6 +488,11 @@ def plan(source: str | list[str], style: str = "vlog", target_duration: float | 
 
     Anche con ``chrono``/``name`` l'apertura, il picco e la chiusura restano
     scelti per punteggio: sono decisioni di ritmo, non di cronologia.
+
+    ``segment=True`` (predefinito) spezza le riprese piu' lunghe di
+    :data:`SEGMENT_OVER` secondi nei loro tratti prima di valutarle: senza,
+    un'unica ripresa da tre minuti vale un punteggio solo e il piano che ne esce
+    e' arbitrario. Con ``segment=False`` si torna a un'inquadratura per file.
     """
     st = STYLES.get(style)
     if st is None:
@@ -346,7 +508,13 @@ def plan(source: str | list[str], style: str = "vlog", target_duration: float | 
     if not paths:
         raise ValueError("nessun file da montare")
 
-    shots = [shot_from(p, st, deep=deep, **kw) for p in paths]
+    if segment:
+        shots = [s for p in paths for s in shots_from(p, st, deep=deep, **kw)]
+    else:
+        shots = [shot_from(p, st, deep=deep, **kw) for p in paths]
+    spezzati = len(shots) > len(paths)
+
+    posizione = {id(s): i for i, s in enumerate(shots)}
 
     scarti = [s for s in shots if s.verdict == "drop"]
     for s in scarti:
@@ -356,6 +524,12 @@ def plan(source: str | list[str], style: str = "vlog", target_duration: float | 
     doppioni: list[Shot] = []
     if dedupe and len(tenute) > 1:
         tenute, doppioni = drop_duplicates(tenute)
+        # drop_duplicates scorre per punteggio e restituisce in quell'ordine:
+        # senza rimetterle a posto un ordine cronologico richiesto uscirebbe
+        # rimescolato proprio da chi doveva solo togliere i doppioni.
+        tenute.sort(key=lambda s: posizione[id(s)])
+
+    tenute, fuori = select(tenute, st, target_duration)
 
     ordinate = arrange(tenute, st, keep_order=order != "score")
     if order == "score":
@@ -379,15 +553,31 @@ def plan(source: str | list[str], style: str = "vlog", target_duration: float | 
         })
         t += s.used
 
+    # Con le riprese spezzate gli scarti sono centinaia di tratti: elencarli
+    # tutti seppellisce le poche righe che si leggono davvero. Si mostrano i
+    # primi, il resto si conta.
+    buttate = scarti + doppioni
+    note = _notes(ordinate, st, t, target_duration, attaccate, order)
+    if spezzati:
+        note.insert(0, f"{len(paths)} riprese spezzate in {len(shots)} tratti; "
+                       f"{len(ordinate)} entrano nel montaggio")
+    if fuori:
+        note.append(f"{len(fuori)} tratti buoni restano fuori per la durata "
+                    f"richiesta: alza target_duration per farne entrare altri")
+
     return {
         "stile": {"nome": st.name, "label": st.label, "desc": st.desc,
                   "taglio": [st.shot_min, st.shot_max], "transizione": st.transition},
         "ordine": order,
         "durata_totale": round(t, 3),
+        "tratti_valutati": len(shots),
         "clip": timeline,
-        "scartate": [{"nome": Path(s.path).name, "path": s.path, "perche": s.reason,
-                      "problemi": s.issues} for s in scarti + doppioni],
-        "note": _notes(ordinate, st, t, target_duration, attaccate, order),
+        "scartate": [{"nome": Path(s.path).name, "path": s.path,
+                      "in": round(s.in_, 3), "out": round(s.out, 3),
+                      "perche": s.reason, "problemi": s.issues}
+                     for s in buttate[:20]],
+        "scartate_totale": len(buttate),
+        "note": note,
     }
 
 
@@ -419,17 +609,26 @@ def _notes(shots: list[Shot], style: Style, total: float, target: float | None,
 
 
 def apply_plan(store, plan_data: dict, track: str | None = None) -> dict:
-    """Costruisce la timeline dal piano: importa, taglia, dispone, transizioni."""
-    creati = []
-    for item in plan_data["clip"]:
-        media = store.import_media([item["path"]])[0]
-        c = store.add_clip(media.id, track_id=track, start=item["inizio_timeline"],
-                           in_=item["in"], duration=item["durata"])
-        creati.append(c.id)
-    trans = plan_data["stile"].get("transizione", "cut")
-    if trans and trans != "cut" and len(creati) > 1:
-        dur = STYLES[plan_data["stile"]["nome"]].transition_dur
-        # la transizione e' in uscita: l'ultima clip non ne ha una
-        for cid in creati[:-1]:
-            store.set_transition(cid, trans, dur)
+    """Costruisce la timeline dal piano: importa, taglia, dispone, transizioni.
+
+    Tutto dentro un blocco solo: applicare un piano e' un gesto, e con le riprese
+    spezzate le clip sono decine — una modifica per clip vorrebbe dire decine di
+    undo per tornare indietro da una scelta sola.
+    """
+    with store.batch():
+        media = {p: m.id for p, m in zip(
+            dict.fromkeys(i["path"] for i in plan_data["clip"]),
+            store.import_media(list(dict.fromkeys(i["path"] for i in plan_data["clip"]))))}
+        clips = store.add_clips([
+            {"media": media[i["path"]], "start": i["inizio_timeline"],
+             "in": i["in"], "duration": i["durata"]}
+            for i in plan_data["clip"]], track_id=track)
+        creati = [c.id for c in clips]
+
+        trans = plan_data["stile"].get("transizione", "cut")
+        if trans and trans != "cut" and len(creati) > 1:
+            dur = STYLES[plan_data["stile"]["nome"]].transition_dur
+            # la transizione e' in uscita: l'ultima clip non ne ha una
+            for cid in creati[:-1]:
+                store.set_transition(cid, trans, dur)
     return {"clip": creati, "durata": plan_data["durata_totale"]}
