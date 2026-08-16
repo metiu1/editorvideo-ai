@@ -26,17 +26,85 @@ from . import ffmpeg, hw, probe, proxy, render, review, story, versions, vision
 from .model import TRANSITIONS
 from .store import EditError, Store
 
+# Le istruzioni del server arrivano a chiunque usi vedit, quindi qui non sta solo
+# come si chiamano gli strumenti: sta anche come si monta. I difetti elencati
+# sotto sono quelli veri, raccolti guardando i video che escono da questo editor
+# quando lo guida un agente — musica a volume fisso, solo stacchi secchi,
+# inquadrature ripetute, e un video che dopo dieci secondi non aggiunge piu'
+# niente. Nessuno di questi e' un limite degli strumenti: sono scelte che non
+# vengono fatte.
+ISTRUZIONI = """\
+Editor video non lineare.
+
+Flusso: project_create -> import_media -> plan_edit (per scegliere il materiale) ->
+add_clips -> rifiniture (set_transition, set_speed, set_transform, add_effect,
+set_audio) -> preview_grid per guardare -> render_video.
+
+I tempi sono in secondi. Ogni parametro animabile accetta anche
+{'kf':[{'t':0,'v':0},{'t':2,'v':1,'ease':'ease_in_out'}]}, con t relativo
+all'inizio della clip. project_info da' lo stato della timeline con gli id.
+Per un montaggio serrato usa add_clips: mette tutti i tagli in una chiamata sola,
+ed e' atomico.
+
+== COME MONTARE ==
+
+Regola sopra tutte: **guarda il risultato**. preview_grid mostra il montaggio
+tutto insieme, preview_frame un fotogramma (alza width a 1280 per giudicare un
+dettaglio). Un montaggio non guardato e' un montaggio non fatto.
+
+1. LA MUSICA DEVE MUOVERSI. Una traccia a volume fisso per tutta la durata e' la
+   prima cosa che rende un video piatto, e non si nota consapevolmente: si sente
+   solo che "non succede niente". Usa music_beats: il profilo di energia dice
+   dove sono intro, stacco e ritornello. Scegli una sezione con un arco vero
+   (parte, sale, culmina intorno al 75%, atterra) invece dei primi 90 secondi.
+   Automatizza il guadagno con keyframe veri —
+   set_audio(gain_db={'kf':[...]}) — abbassando dove il video deve respirare e
+   rialzando sul picco. Mezzo secondo di quasi silenzio prima di un colpo vale
+   piu' di qualunque effetto. Chiudi con una dissolvenza sull'ultima battuta,
+   non con un taglio netto sulla musica.
+
+2. NON TUTTI STACCHI SECCHI. Il taglio secco e' il valore predefinito, non
+   l'unica scelta: un video fatto di soli stacchi si legge come un elenco.
+   Disponibili: crossfade / set_transition con dissolve, wipe_*, slide_*, iris;
+   un flash bianco di 2-3 fotogrammi con add_color tra due clip; una rampa con
+   set_speed; una spinta lenta con set_transform(scale={'kf':[...]}); i
+   fotogrammi mossi del girato come giunzione naturale. Ogni transizione deve
+   avere un motivo — cambio di luogo, di tempo, di intensita'. Se non ce l'ha,
+   taglia secco: una dissolvenza messa a caso e' peggio di uno stacco.
+
+3. MAI LA STESSA INQUADRATURA DUE VOLTE. Riusare lo stesso punto d'attacco si
+   vede subito e fa sembrare il materiale finito. Tieni il conto dei tratti gia'
+   usati (file + in/out) e controlla project_info prima di aggiungere. Se il
+   materiale non basta, **accorcia il video**: novanta secondi con dieci
+   ripetizioni valgono meno di sessanta senza.
+
+4. DOPO DIECI SECONDI SERVE INFORMAZIONE NUOVA. Passata l'apertura chi guarda ha
+   capito il tema; da li' in poi ogni blocco deve aggiungere qualcosa — un luogo
+   nuovo, un soggetto nuovo, una conseguenza, un dettaglio che prima non si
+   vedeva. Tagliare piu' veloce su immagini equivalenti non salva niente: il
+   ritmo senza contenuto e' rumore. Ragiona a blocchi di 10-15 secondi, ognuno
+   con una cosa nuova, e cambia scala tra loro (campo lungo, medio, dettaglio).
+   Alterna anche le durate: tagli tutti uguali diventano un metronomo.
+
+5. CINEMATOGRAFICO E' UNA SCELTA, NON UN FILTRO. Un momento forte tenuto tre
+   secondi vale piu' di dieci da mezzo. Dai movimento dentro l'inquadratura
+   (spinta lenta con set_transform), correggi il colore con mano leggera sul
+   master (color, curves, temperature), riquadra se il soggetto sta in un
+   angolo (set_transform o auto_reframe), e chiudi su un'immagine che riassume,
+   tenuta abbastanza da respirare.
+
+Montare a tempo: prendi bpm/beat/bar da music_beats e fai cadere gli stacchi
+sulla griglia. Non stimare il tempo a occhio — un errore dell'1% su novanta
+secondi e' quasi una battuta di deriva e gli stacchi finiscono fuori tempo.
+
+Prima di dire che e' finito: preview_grid su tutto il montaggio, audio_levels per
+i livelli, verify_edit per i problemi rimasti.
+"""
+
 mcp = MCPServer(
     name="vedit",
     version="0.1.0",
-    instructions=(
-        "Editor video non lineare. Flusso tipico: project_create -> import_media -> "
-        "add_clip/add_text -> modifiche (split, set_speed, add_effect, set_transform) -> "
-        "preview_frame per controllare il fotogramma -> render. "
-        "I tempi sono in secondi. Ogni parametro animabile accetta anche "
-        "{'kf':[{'t':0,'v':0},{'t':2,'v':1,'ease':'ease_in_out'}]} dove t e' il tempo "
-        "relativo all'inizio della clip. Usa project_info per lo stato della timeline."
-    ),
+    instructions=ISTRUZIONI,
 )
 
 _stores: dict[str, Store] = {}

@@ -230,3 +230,31 @@ async def test_sinonimi_degli_argomenti(assets, tmp_path):
     await call("add_clip", media=media[0]["id"], duration=1.0)
     r = await srv.mcp.call_tool("preview_frame", {"time": 0.5, "width": 160})
     assert not r.is_error
+
+
+def test_istruzioni_contengono_le_regole_di_montaggio():
+    """Le istruzioni del server sono l'unica cosa che l'agente legge sempre.
+
+    Dentro non c'e' solo come si chiamano gli strumenti: ci sono i difetti veri
+    dei video che escono da qui — musica a volume fisso, solo stacchi secchi,
+    inquadrature ripetute, un video che dopo dieci secondi non aggiunge piu'
+    niente. Se sparisce quella parte, l'editor torna a produrli.
+    """
+    t = srv.ISTRUZIONI.lower()
+    assert srv.mcp.instructions == srv.ISTRUZIONI
+    for regola in ("musica", "stacchi", "due volte", "dieci secondi", "cinematografico"):
+        assert regola in t, f"regola di montaggio persa: {regola}"
+    # e devono restare agganciate a strumenti veri, non a buoni propositi
+    for strumento in ("music_beats", "add_clips", "preview_grid", "set_transform",
+                      "set_transition", "set_audio", "verify_edit"):
+        assert strumento in srv.ISTRUZIONI, f"regola senza strumento: {strumento}"
+
+
+@pytest.mark.anyio
+async def test_gli_strumenti_citati_esistono_davvero():
+    """Le istruzioni non devono promettere strumenti che non ci sono."""
+    nomi = {t.name for t in await srv.mcp.list_tools()}
+    citati = {p.strip(".,:;()") for p in srv.ISTRUZIONI.replace("\n", " ").split()
+              if p.strip(".,:;()") in nomi or "_" in p}
+    inventati = {c for c in citati if "_" in c and c.isidentifier() and c not in nomi}
+    assert not inventati, f"strumenti citati ma inesistenti: {sorted(inventati)}"

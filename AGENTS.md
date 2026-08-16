@@ -179,6 +179,26 @@ caduto sull'inquadratura sbagliata.
 L'ordine degli effetti conta e si cambia con `move_effect`: denoise prima di sharpen pulisce e
 poi incide, l'ordine opposto incide anche il rumore.
 
+### Come montare (non solo come chiamare gli strumenti)
+
+Il server MCP dichiara le regole di montaggio nelle proprie istruzioni
+(`mcp_server.ISTRUZIONI`), così arrivano a qualunque client. Sono lì perché sono i difetti
+veri dei video che escono da qui, non limiti degli strumenti — sono scelte che non vengono
+fatte:
+
+1. **la musica deve muoversi** — volume fisso per tutta la durata è la prima cosa che rende un
+   video piatto; automatizza il guadagno con i keyframe e scegli la sezione con `music_beats`;
+2. **non tutti stacchi secchi** — il taglio secco è il default, non l'unica scelta; ogni
+   transizione però deve avere un motivo;
+3. **mai la stessa inquadratura due volte** — se il materiale non basta, accorcia il video;
+4. **dopo dieci secondi serve informazione nuova** — tagliare più veloce sulle stesse immagini
+   non salva niente;
+5. **cinematografico è una scelta, non un filtro** — un momento forte tenuto tre secondi vale
+   più di dieci da mezzo.
+
+Se cambi quelle istruzioni, `tests/test_mcp.py` verifica che le regole restino: sono la parte
+che l'agente legge sempre.
+
 **Un progetto alla volta per file.** UI e server MCP salvano da soli dopo ogni modifica: se lo
 stesso `.json` è aperto in tutti e due, l'ultimo che salva vince. Non c'è un lock.
 
