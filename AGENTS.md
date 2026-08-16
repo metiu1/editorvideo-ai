@@ -1,0 +1,159 @@
+# Istruzioni per un agente su questa repo
+
+Questo file è il contratto per chi arriva qui con un agente di codice (Claude Code, Codex,
+Cursor, Copilot…). Chi legge deve poter partire da una repo appena clonata e arrivare a un
+editor funzionante senza fare domande.
+
+`CLAUDE.md` importa questo file: le istruzioni sono le stesse per tutti.
+
+---
+
+## 1. Installazione: un comando
+
+```bash
+python scripts/setup.py
+```
+
+Fa tutto: dipendenze Python (`pip install -e ".[dev,chat]"`), interfaccia web compilata
+(`npm ci && npm run build`), server MCP registrato, `vedit doctor`, test veloci.
+Rilanciarlo è sicuro: i passi già a posto vengono saltati.
+
+Opzioni utili:
+
+| Opzione | Quando |
+|---|---|
+| `--venv` | tenere le dipendenze in `.venv` invece che nell'interprete corrente |
+| `--install-ffmpeg` | provare a installare ffmpeg con winget / brew / apt |
+| `--no-frontend` | serve solo CLI o MCP, niente interfaccia web |
+| `--no-test` | installazione rapida, verifica dopo |
+| `--rebuild` | ricompilare la UI dopo aver toccato `frontend/src` |
+| `--reinstall` | forzare `pip install` (di norma saltato se le dipendenze ci sono) |
+| `--json` | esito leggibile da programma: un oggetto JSON e basta |
+
+**Con `--json` l'unico output è un JSON** con `result` (`ok` / `warn` / `fail`) e la lista dei
+passi con `status`, `detail`, `hint`. Se sei un agente, usa questa forma e leggi `hint` prima
+di inventarti una diagnosi.
+
+### Cosa può ancora fallire, e cosa fare
+
+| Sintomo | Rimedio |
+|---|---|
+| `ffmpeg non trovato` | `python scripts/setup.py --install-ffmpeg`, oppure installalo a mano e mettilo nel `PATH`, oppure indica i binari con `VEDIT_FFMPEG` / `VEDIT_FFPROBE`. Senza ffmpeg non si renderizza niente: è l'unica dipendenza davvero obbligatoria. |
+| `externally-managed-environment` | gestito da solo: lo script crea `.venv` e ci reinstalla dentro. |
+| `eseguibile in uso` (Windows) | l'interfaccia o il server MCP sono avviati e tengono `vedit-mcp.exe`. Chiudili e rilancia. |
+| `npm non trovato` | Node.js 18+ manca: CLI e MCP funzionano lo stesso, resta fuori solo l'interfaccia web. |
+| extra `chat` non installabile | l'assistente in chat resta spento, tutto il resto è identico. |
+
+L'assistente in chat dentro la UI vuole anche `ANTHROPIC_API_KEY` nell'ambiente. Senza chiave
+la scheda *assistente* spiega perché è spenta; nessun'altra funzione ne risente.
+
+---
+
+## 2. Verificare che funzioni davvero
+
+```bash
+vedit doctor                             # ffmpeg, encoder GPU, filtri
+pytest -m "not slow"                     # logica, senza ffmpeg (~15s)
+pytest                                   # tutto, render reali inclusi (~2min)
+cd frontend && npm test                  # funzioni pure UI + montaggio in jsdom
+```
+
+Prova end-to-end in tre comandi, utile come verifica dopo una modifica:
+
+```bash
+vedit new /tmp/p.json --preset 1080p
+vedit import /tmp/p.json un_video.mp4 && vedit info /tmp/p.json   # stampa gli id dei media
+vedit add /tmp/p.json <id_media> --duration 3 && vedit render /tmp/p.json /tmp/out.mp4
+```
+
+---
+
+## 3. Come è fatto (quel tanto che serve per non sbagliare)
+
+Il progetto è **un documento JSON**. Il render è una funzione pura di quel documento,
+compilata in un unico `filter_complex` di ffmpeg. Stesso progetto, stesso file in uscita.
+
+```
+backend/vedit/
+  model.py       documento di progetto (dataclass <-> JSON)
+  store.py       operazioni di editing + undo/redo + salvataggio atomico
+  keyframes.py   keyframe -> espressioni ffmpeg
+  effects.py     registro effetti: parametri, validazione, filtri
+  presets.py     look, catene audio, transizioni gia' tarate
+  graph.py       timeline -> filter_complex
+  render.py      esecuzione ffmpeg, progresso, analisi (loudness, stabilizzazione)
+  proxy.py       proxy, forme d'onda, miniature
+  chat.py        assistente: i suoi strumenti sono i metodi di Store
+  mcp_server.py  strumenti MCP
+  api.py         API REST/WebSocket per la UI
+  cli.py         riga di comando
+frontend/src/    interfaccia web (React + Vite)
+tests/           test, inclusi render reali di ogni effetto
+```
+
+**Regola che tiene in piedi tutto: ogni modifica al progetto passa da `Store`.** UI, assistente
+e agente MCP chiamano gli stessi metodi. Se aggiungi un'operazione, mettila in `store.py` e poi
+esponila dove serve — mai scrivere dentro il documento da `api.py`, `mcp_server.py` o `cli.py`.
+
+Conseguenze pratiche quando modifichi qualcosa:
+
+- **nuovo effetto** → `effects.py` (registro con parametri e validazione); il test parametrico
+  in `tests/test_effects.py` lo renderizza davvero, quindi un filtro sbagliato si vede subito;
+- **nuovo strumento MCP** → metodo in `store.py`, wrapper in `mcp_server.py`, test in
+  `tests/test_mcp.py`;
+- **cambio alla UI** → `npm run build` (o `python scripts/setup.py --rebuild`), altrimenti il
+  server continua a servire il `dist` vecchio;
+- **cambio al grafo** → `pytest -m slow` esegue i render reali: è lì che si scoprono le
+  regressioni di composizione.
+
+Le scelte tecniche meno ovvie (ordine di disegno, `tpad` invece dei PTS, transizioni fatte con
+maschere alpha, filtergraph su file per il limite di 32k di Windows) sono spiegate nel README,
+sezione *Come è fatto*: leggila prima di toccare `graph.py`.
+
+---
+
+## 4. Guidare l'editor da agente (MCP)
+
+`.mcp.json` è già nella repo e `scripts/setup.py` lo allinea all'interprete che ha installato
+davvero il pacchetto. Claude Code lo propone all'apertura della cartella; per registrarlo
+altrove:
+
+```bash
+claude mcp add vedit -- vedit-mcp
+```
+
+Configurazione equivalente per gli altri client (Cursor `.cursor/mcp.json`, Codex, VS Code):
+
+```json
+{ "mcpServers": { "vedit": { "command": "vedit-mcp", "args": [] } } }
+```
+
+Se hai installato con `--venv`, al posto di `vedit-mcp` va il percorso assoluto
+(`.venv/bin/vedit-mcp`, su Windows `.venv\Scripts\vedit-mcp.exe`) — è esattamente quello che
+`scripts/setup.py` scrive in `.mcp.json`.
+
+Flusso tipico degli strumenti:
+
+```
+project_create -> import_media -> add_clip / add_text -> modifiche (split, set_speed,
+add_effect, set_transform) -> preview_frame per guardare il fotogramma -> render_video
+```
+
+`preview_frame` restituisce **l'immagine vera**: guardala invece di dare per scontato il
+risultato. I tempi sono in secondi. Ogni parametro animabile accetta anche un blocco keyframe
+`{"kf": [{"t": 0, "v": 0}, {"t": 2, "v": 1, "ease": "ease_in_out"}]}` con `t` relativo
+all'inizio della clip. `project_info` dà lo stato della timeline con gli id.
+
+**Un progetto alla volta per file.** UI e server MCP salvano da soli dopo ogni modifica: se lo
+stesso `.json` è aperto in tutti e due, l'ultimo che salva vince. Non c'è un lock.
+
+---
+
+## 5. Convenzioni della repo
+
+- Codice, commenti e messaggi all'utente **in italiano**, come il resto del progetto.
+- Niente dipendenze nuove senza motivo: il core sta su ffmpeg e libreria standard, l'unico
+  extra facoltativo è `anthropic` per l'assistente.
+- Ogni comportamento nuovo arriva con un test; i render reali stanno dietro il marker `slow`.
+- Prima di dire che una modifica funziona: `pytest -m "not slow"` più il pezzo di `slow` che la
+  tocca. Se hai cambiato la UI, anche `cd frontend && npm test`.

@@ -13,6 +13,8 @@ tutti dalle stesse operazioni.
 
 ## Indice
 
+- [Installazione in un comando](#installazione-in-un-comando)
+- [Darlo in mano a un agente](#darlo-in-mano-a-un-agente)
 - [Requisiti](#requisiti)
 - [Installazione](#installazione)
 - [Avvio](#avvio)
@@ -35,6 +37,57 @@ tutti dalle stesse operazioni.
 
 ---
 
+## Installazione in un comando
+
+```bash
+git clone https://github.com/metiu1/editorvideo-ai.git
+cd editorvideo-ai
+python scripts/setup.py
+```
+
+Lo script fa tutto: dipendenze Python, interfaccia web compilata, server MCP registrato,
+`vedit doctor` e i test veloci come verifica. Stampa una riga per passo e alla fine dice cosa
+manca ancora e come rimediare. Rilanciarlo è sicuro: quello che è già a posto viene saltato.
+
+```bash
+python scripts/setup.py --venv             # dipendenze in .venv invece che nell'interprete corrente
+python scripts/setup.py --install-ffmpeg   # prova a installare ffmpeg con winget / brew / apt
+python scripts/setup.py --no-frontend      # solo CLI e MCP, niente interfaccia web
+python scripts/setup.py --rebuild          # ricompila la UI dopo aver toccato frontend/src
+python scripts/setup.py --json             # esito come JSON, per gli script e per gli agenti
+```
+
+Poi:
+
+```bash
+vedit ui                                   # http://127.0.0.1:8760
+```
+
+L'unica cosa che lo script non può inventarsi è **ffmpeg**: se manca e `--install-ffmpeg` non
+riesce, installalo a mano ([ffmpeg.org](https://ffmpeg.org/download.html)) o indica i binari con
+`VEDIT_FFMPEG` / `VEDIT_FFPROBE`. Chi preferisce i passaggi a mano li trova in
+[Installazione](#installazione).
+
+---
+
+## Darlo in mano a un agente
+
+Serve solo l'indirizzo della repo. Da incollare al proprio agente di codice:
+
+> Clona `https://github.com/metiu1/editorvideo-ai.git`, entra nella cartella, leggi `AGENTS.md`
+> e installa tutto seguendo quelle istruzioni. Poi dimmi com'è andata.
+
+`AGENTS.md` (che `CLAUDE.md` importa, così vale per Claude Code, Codex, Cursor e gli altri)
+contiene il comando di installazione, i guasti tipici col rimedio, come verificare, la mappa
+del codice con le regole per modificarlo e l'uso del server MCP. Con Claude Code c'è anche il
+comando `/setup`, che installa e riferisce l'esito.
+
+Finita l'installazione l'agente può **usare** l'editor, non solo compilarlo: `.mcp.json` è già
+nella repo e lo script lo allinea all'interprete giusto, quindi il server `vedit` coi suoi
+strumenti è disponibile subito (vedi [Uso da agente](#uso-da-agente-mcp)).
+
+---
+
 ## Requisiti
 
 | | |
@@ -50,6 +103,8 @@ Verifica ffmpeg con `ffmpeg -version`. Se manca: [ffmpeg.org/download](https://f
 ---
 
 ## Installazione
+
+Gli stessi passi che fa `python scripts/setup.py`, uno per uno, per chi li vuole in mano.
 
 ```bash
 git clone https://github.com/metiu1/editorvideo-ai.git
@@ -270,6 +325,9 @@ viene proposto al primo avvio (va approvato una volta). Altrove:
 ```bash
 claude mcp add vedit -- vedit-mcp
 ```
+
+Per gli altri client (Cursor, Codex, VS Code) la configurazione equivalente e il flusso
+consigliato degli strumenti stanno in [`AGENTS.md`](AGENTS.md).
 
 42 strumenti: creazione progetto, import, taglio/split/trim, tracce (aggiungere,
 riordinare, solo, blocco), velocità e reverse, transform con keyframe, effetti video e audio,
