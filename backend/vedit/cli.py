@@ -145,6 +145,7 @@ def cmd_doctor(a) -> int:
     for codec, enc in info.encoders.items():
         tag = "GPU" if info.is_hw(enc) else "CPU"
         print(f"  {codec:5} -> {enc:14} [{tag}]")
+    print(f"decodifica: {info.hwaccel or 'software (nessun metodo hardware ha superato la prova)'}")
     print(f"cache: {proxy.cache_dir()}")
     mancanti = [f for f in ("vidstabdetect", "rubberband", "loudnorm", "zoompan")
                 if f not in ffmpeg.filters()]

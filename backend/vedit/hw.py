@@ -3,6 +3,12 @@
 La presenza dell'encoder nella build non basta: NVENC compila sempre ma fallisce
 a runtime se driver/GPU non ci sono. Facciamo una prova reale di 1 frame e la
 mettiamo in cache su disco.
+
+Codifica e decodifica accelerate sono due cose distinte e vanno provate
+separatamente: NVENC puo' codificare benissimo su una macchina dove il
+decodificatore DXVA2 non riesce nemmeno a creare il device Direct3D. Dare per
+buona la decodifica perche' funziona la codifica e' proprio come si arriva a un
+ffmpeg che esce con 0xC0000005 a meta' render.
 """
 
 from __future__ import annotations
@@ -24,12 +30,22 @@ CANDIDATES = {
     "av1": ["av1_nvenc", "av1_qsv", "libsvtav1"],
 }
 
+# Metodi di decodifica accelerata, in ordine di preferenza. Niente "auto": e'
+# ffmpeg a scegliere, e su Windows sceglie spesso proprio quello che non regge
+# piu' contesti aperti insieme.
+DECODERS = (
+    ["d3d11va", "cuda", "qsv", "dxva2"] if os.name == "nt"
+    else ["cuda", "vaapi", "qsv", "videotoolbox"]
+)
+
 
 @dataclass
 class HWInfo:
     encoders: dict  # codec -> encoder scelto
     working: list  # encoder hw verificati
     checked_at: float = 0.0
+    # metodo di decodifica accelerata verificato ("" = nessuno utilizzabile)
+    hwaccel: str = ""
 
     def encoder_for(self, codec: str, prefer_hw: bool = True) -> str:
         if not prefer_hw:
@@ -61,12 +77,49 @@ def _test_encoder(enc: str) -> bool:
         return False
 
 
+def _probe_file() -> Path | None:
+    """File h264 minimo su cui provare la decodifica accelerata."""
+    f = _cache_file().with_name("hwprobe.mp4")
+    if f.exists() and f.stat().st_size > 0:
+        return f
+    args = [
+        ffmpeg.binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        "-f", "lavfi", "-i", "testsrc=s=320x240:r=25:d=1",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(f),
+    ]
+    try:
+        if ffmpeg.run(args, timeout=60, check=False).returncode == 0 and f.stat().st_size > 0:
+            return f
+    except Exception:
+        pass
+    return None
+
+
+def _test_hwaccel(method: str, probe: Path) -> bool:
+    """Prova la decodifica accelerata come la usa il render: piu' ingressi insieme.
+
+    Con un ingresso solo passano anche metodi che poi cedono: il render apre un
+    contesto per clip (video e audio separati), e il limite lo si trova li'. Due
+    ingressi sono il minimo che riproduca quella condizione.
+    """
+    args = [ffmpeg.binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+    for _ in range(2):
+        args += ["-hwaccel", method, "-i", str(probe)]
+    args += ["-f", "null", "NUL" if os.name == "nt" else "/dev/null"]
+    try:
+        return ffmpeg.run(args, timeout=60, check=False).returncode == 0
+    except Exception:
+        return False
+
+
 def detect(force: bool = False) -> HWInfo:
     cache = _cache_file()
     if not force and cache.exists():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
-            if time.time() - data.get("checked_at", 0) < CACHE_TTL:
+            # "hwaccel" assente = cache scritta prima che la decodifica venisse
+            # verificata: va rifatta, altrimenti resta il comportamento vecchio
+            if time.time() - data.get("checked_at", 0) < CACHE_TTL and "hwaccel" in data:
                 return HWInfo(**data)
         except Exception:
             pass
@@ -85,7 +138,13 @@ def detect(force: bool = False) -> HWInfo:
                 chosen[codec] = enc
                 working.append(enc)
                 break
-    info = HWInfo(encoders=chosen, working=working, checked_at=time.time())
+
+    hwaccel = ""
+    probe = _probe_file() if working else None
+    if probe is not None:
+        hwaccel = next((m for m in DECODERS if _test_hwaccel(m, probe)), "")
+
+    info = HWInfo(encoders=chosen, working=working, checked_at=time.time(), hwaccel=hwaccel)
     try:
         cache.write_text(json.dumps(asdict(info), indent=2), encoding="utf-8")
     except OSError:
@@ -129,12 +188,3 @@ def _bufsize(bitrate: str) -> str:
         return f"{n * 2:.0f}{unit}"
     except (ValueError, IndexError):
         return bitrate
-
-
-def decode_args(enc_hw: bool) -> list[str]:
-    """Decodifica accelerata quando disponibile (fa poco su clip corte, molto su 4K)."""
-    if not enc_hw:
-        return []
-    if os.name == "nt":
-        return ["-hwaccel", "auto"]
-    return ["-hwaccel", "auto"]

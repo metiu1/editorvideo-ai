@@ -56,7 +56,9 @@ class CompileOptions:
     start: float | None = None  # taglio della porzione di timeline da rendere
     end: float | None = None
     workdir: str | None = None  # per i file di testo di drawtext
-    hwaccel: bool = False
+    # metodo di decodifica accelerata gia' verificato ("" = decodifica software).
+    # Mai "auto": la scelta la fa hw.detect() provandola davvero.
+    hwaccel: str = ""
     stab_files: dict = field(default_factory=dict)  # clip_id -> file .trf di vidstab
 
 
@@ -214,7 +216,7 @@ class _Builder:
         path = self.src_path(media)
         args: list[str] = []
         if self.o.hwaccel and media.kind == "video":
-            args += ["-hwaccel", "auto"]
+            args += ["-hwaccel", self.o.hwaccel]
         visible = clip_visible(clip)
         if media.kind == "image":
             args += ["-loop", "1", "-framerate", n(self.fps), "-t", n(visible + 0.1)]

@@ -262,6 +262,23 @@ class Master:
 
 
 @dataclass
+class Marker:
+    """Una nota ancorata a un istante della timeline.
+
+    E' la memoria del montaggio: perche' un taglio sta li', cosa manca ancora,
+    dove il committente ha detto che non funziona. Senza, ogni sessione
+    ricomincia da zero.
+    """
+
+    id: str = field(default_factory=lambda: new_id("mk"))
+    t: float = 0.0
+    duration: float = 0.0          # >0 = regione, 0 = punto
+    note: str = ""
+    kind: str = "nota"             # nota | da_fare | problema | approvato
+    color: str = "#FFC107"
+
+
+@dataclass
 class Project:
     version: int = 1
     name: str = "untitled"
@@ -269,6 +286,7 @@ class Project:
     media: list[Media] = field(default_factory=list)
     tracks: list[Track] = field(default_factory=list)
     master: Master = field(default_factory=Master)
+    markers: list[Marker] = field(default_factory=list)
 
     # ---- lookup -------------------------------------------------------
     def media_by_id(self, mid: str) -> Media | None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import array
 import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -78,9 +79,22 @@ def ensure(project: Project, height: int = 540, force: bool = False) -> dict:
 
 
 def waveform(media: Media, points_per_second: int = 40, max_points: int = 40000) -> list[float]:
-    """Picchi audio normalizzati 0..1, per disegnare la traccia in timeline."""
+    """Picchi audio normalizzati 0..1, per disegnare la traccia in timeline.
+
+    Il risultato sta in cache su disco come la striscia di fotogrammi: ricavarlo
+    vuol dire decodificare tutto l'audio del file, e viene chiesto a ogni
+    caricamento della pagina e da ogni pannello che lo disegna.
+    """
     if not media.has_audio:
         return []
+
+    cache = cache_dir("wave") / f"{_key(media.path, f'w{points_per_second}x{max_points}')}.json"
+    if cache.exists() and cache.stat().st_size > 0:
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass  # cache illeggibile: si rifa'
+
     rate = 8000
     args = [
         ffmpeg.binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
@@ -105,6 +119,13 @@ def waveform(media: Media, points_per_second: int = 40, max_points: int = 40000)
         if not chunk:
             break
         peaks.append(round(max(abs(min(chunk)), abs(max(chunk))) / 32768.0, 4))
+
+    tmp = cache.with_name(f"~{cache.name}")
+    try:
+        tmp.write_text(json.dumps(peaks), encoding="utf-8")
+        os.replace(tmp, cache)   # atomico: nessuno legge un file a meta'
+    except OSError:
+        tmp.unlink(missing_ok=True)   # senza cache si ricalcola, non e' un errore
     return peaks
 
 
@@ -166,7 +187,7 @@ def clear(kind: str | None = None) -> int:
     import shutil
 
     freed = 0
-    targets = [kind] if kind else ["proxy", "thumbs", "strip", "preview", "stab"]
+    targets = [kind] if kind else ["proxy", "thumbs", "strip", "wave", "preview", "stab"]
     for t in targets:
         d = cache_dir(t)
         for f in d.rglob("*"):

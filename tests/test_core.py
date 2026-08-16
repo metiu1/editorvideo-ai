@@ -250,3 +250,48 @@ def test_render_frame(assets, tmp_path):
     s.add_clip(m.id)
     p = render.render_frame(s.project, 1.0, str(tmp_path / "f.jpg"), width=320, use_proxy=False)
     assert Path(p).stat().st_size > 0
+
+
+def test_mp3_con_copertina_resta_audio(audio_con_copertina, tmp_path):
+    """La copertina e' uno stream video: non deve trasformare il brano in video.
+
+    Se passa per video finisce su una traccia video, prende la risoluzione
+    della copertina e la striscia in timeline resta vuota.
+    """
+    s = Store.create(path=str(tmp_path / "p.json"))
+    m = s.import_media([audio_con_copertina])[0]
+    assert m.kind == "audio"
+    assert m.has_audio and not m.has_video
+    assert m.duration > 2.5
+
+    with pytest.raises(EditError):
+        s.add_clip(m.id, s.project.tracks[0].id)   # traccia video: deve rifiutare
+
+
+# ---------------------------------------------------------------- hardware
+def test_hwaccel_ripiega_su_software(assets, tmp_path, monkeypatch):
+    """Se la decodifica accelerata cede, il render finisce lo stesso.
+
+    L'accelerazione e' un'ottimizzazione e va trattata come tale: il device
+    hardware puo' non nascere (driver occupato, troppi contesti aperti) e
+    ffmpeg in quel caso non fallisce con grazia, esce di schianto. Prima
+    questo portava via l'export intero.
+    """
+    from vedit import hw
+
+    # libx264 dichiarato "hardware" e un metodo di decodifica inesistente: cosi'
+    # la strada accelerata viene presa e fallisce ovunque, GPU o no
+    monkeypatch.setattr(hw, "detect", lambda force=False: hw.HWInfo(
+        encoders={"h264": "libx264"}, working=["libx264"], hwaccel="nonesiste"))
+
+    s = Store.create("hw", "720p", path=str(tmp_path / "p.json"))
+    m = s.import_media([assets["green"]])[0]
+    s.add_clip(m.id, duration=1.0)
+
+    out = tmp_path / "out.mp4"
+    res = render.render(s.project, render.RenderOptions(
+        output=str(out), quality="draft", width=320, height=180))
+
+    assert res.size > 0
+    assert "-hwaccel" not in res.command          # il secondo giro l'ha tolto
+    assert any("software" in w for w in res.warnings)

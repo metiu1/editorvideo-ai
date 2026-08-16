@@ -37,12 +37,15 @@ export default function Gizmo({ project, clip, imgRef, playhead, run, setError }
     return () => { ro.disconnect(); window.removeEventListener('resize', update); clearInterval(id) }
   }, [imgRef, clip?.id])
 
-  if (!visible || !box || !project) return null
-
-  const [cw, ch] = project.settings.resolution.split('x').map(Number)
+  // Tutto quello che segue sta *prima* di qualsiasi uscita anticipata: sotto
+  // c'e' ancora un useEffect, e gli hook vanno chiamati sempre nello stesso
+  // ordine. Con il return in mezzo, il primo clip che passava sotto la testina
+  // faceva comparire il riquadro, cambiava il numero di hook fra due render e
+  // React buttava via tutto l'albero: schermo nero, editor sparito.
+  const [cw, ch] = (project?.settings?.resolution || '1920x1080').split('x').map(Number)
   const canvas = { width: cw, height: ch }
-  const media = (project.media || []).find((m) => m.id === clip.media)
-  const [nw, nh] = clip.fit === 'none' && media?.resolution
+  const media = (project?.media || []).find((m) => m.id === clip?.media)
+  const [nw, nh] = clip?.fit === 'none' && media?.resolution
     ? media.resolution.split('x').map(Number)
     : [cw, ch]
   const native = { width: nw, height: nh }
@@ -50,7 +53,7 @@ export default function Gizmo({ project, clip, imgRef, playhead, run, setError }
   const scale = sampleKf(tr.scale ?? 1, clipTime) || 1
   const x = sampleKf(tr.x ?? 0, clipTime)
   const y = sampleKf(tr.y ?? 0, clipTime)
-  const k = box.w / cw
+  const k = box ? box.w / cw : 1
 
   const start = (e, mode) => {
     if (animated) return
@@ -89,6 +92,8 @@ export default function Gizmo({ project, clip, imgRef, playhead, run, setError }
       window.removeEventListener('pointerup', onUp)
     }
   }, [drag?.mode, k, clip?.id, run, setError])
+
+  if (!visible || !box || !project) return null
 
   // durante il trascinamento il riquadro segue il mouse, senza attendere il server
   const liveS = drag?.ns ?? scale

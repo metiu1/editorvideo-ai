@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import Icon from './Icons.jsx'
 
 /**
  * Libreria di look, catene audio e transizioni gia' pronte.
@@ -7,7 +8,7 @@ import React, { useMemo, useState } from 'react'
  * per nome. Clic = applica alla clip selezionata, trascina = applica alla clip
  * su cui lasci il mouse.
  */
-export default function Library({ library, clip, onPreset, onTransition, setError }) {
+export default function Library({ library, clip, onPreset, onTransition, setError, onProva }) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState('video')   // video | audio | transitions
 
@@ -44,17 +45,17 @@ export default function Library({ library, clip, onPreset, onTransition, setErro
 
   return (
     <div className="side">
-      <div className="section-title">libreria</div>
-
-      <div className="tabs libtabs">
+      <div className="tabs">
         <button className={tab === 'video' ? 'on' : ''} onClick={() => setTab('video')}>look</button>
         <button className={tab === 'audio' ? 'on' : ''} onClick={() => setTab('audio')}>audio</button>
         <button className={tab === 'transitions' ? 'on' : ''}
           onClick={() => setTab('transitions')}>transizioni</button>
       </div>
 
-      <div style={{ padding: '6px 8px' }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="cerca…" />
+      <div className="libsearch">
+        <Icon name="cerca" size={14} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="cerca…"
+          onKeyDown={(e) => e.key === 'Escape' && setQ('')} />
       </div>
 
       <div className="medialist">
@@ -71,11 +72,22 @@ export default function Library({ library, clip, onPreset, onTransition, setErro
                   if (isTransition) e.dataTransfer.setData('text/duration', String(p.duration))
                   e.dataTransfer.effectAllowed = 'copy'
                 }}
-                onClick={() => apply(p)}
-                title={`${p.desc || ''}\nclic: applica · trascina: lascia sulla clip`}
+                onClick={() => { onProva?.(null); apply(p) }}
+                // le transizioni non si provano in un fotogramma fermo: sono un
+                // passaggio *fra* due clip, e un istante solo non direbbe nulla
+                onMouseEnter={() => !isTransition && clip && onProva?.({ preset: p.id, label: p.name })}
+                onMouseLeave={() => onProva?.(null)}
+                title={`${p.desc || ''}`
+                  + (isTransition || !clip ? '' : '\npassa sopra per vedere l\'anteprima')
+                  + '\nclic: applica · trascina: lascia sulla clip'}
               >
-                <div className="pname">{p.name}</div>
-                {p.desc && <div className="pdesc">{p.desc}</div>}
+                {/* l'icona sta sull'id: e' lo stesso nome che usa il backend,
+                    quindi non serve una tabella di conversione qui */}
+                <div className="picon"><Icon name={p.id} size={18} /></div>
+                <div className="ptesto">
+                  <div className="pname">{p.name}</div>
+                  {p.desc && <div className="pdesc">{p.desc}</div>}
+                </div>
               </div>
             ))}
           </div>

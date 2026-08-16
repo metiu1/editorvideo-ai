@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from './api.js'
+import Icon from './Icons.jsx'
+import useMediaAssets from './mediaAssets.js'
 import { clamp, fmt } from './util.js'
 
 // Larghezza della colonna con i nomi delle tracce. Deve restare uguale a
@@ -9,12 +10,19 @@ const SNAP_PX = 8        // tolleranza di aggancio
 
 export default function Timeline({
   project, playhead, seek, pxPerSec, selected, setSelected, run, setError,
-  onPreset, onTransition, trackH = 72,
+  onPreset, onTransition, trackH = 72, ask,
 }) {
   const scrollRef = useRef(null)
   const [drag, setDrag] = useState(null)   // modifica in corso, mostrata in anteprima
-  const [strips, setStrips] = useState({}) // media id -> striscia di fotogrammi
-  const [waves, setWaves] = useState({})   // media id -> picchi audio
+  // il rilascio legge qui: leggere lo stato dentro un aggiornatore significa
+  // mettere un effetto collaterale dove React puo' rieseguirlo
+  const dragRef = useRef(null)
+
+  // strisce e forme d'onda arrivano dalla cache condivisa con il pannello media:
+  // sono gli stessi file, e dietro la forma d'onda c'e' la decodifica dell'audio
+  const assets = useMediaAssets(project?.media)
+  const [renaming, setRenaming] = useState(null)   // id della traccia in rinomina
+  const [giunzione, setGiunzione] = useState(null) // stacco sotto una transizione trascinata
 
   const duration = project?.duration || 0
   const width = Math.max(duration, 20) * pxPerSec + HEAD + 240
@@ -33,31 +41,39 @@ export default function Timeline({
    * Per il video le due cose sono invertite: in lista l'ultima e' quella
    * disegnata sopra, quindi salire di una riga significa alzare l'indice.
    */
-  const shiftTrack = (track, up) => {
+  // useCallback non e' decorazione: queste finiscono fra le dipendenze del memo
+  // che disegna le tracce. Ricreate a ogni render lo invaliderebbero sempre.
+  const shiftTrack = useCallback((track, up) => {
     const same = project.tracks.filter((t) => t.kind === track.kind)
     const i = same.findIndex((t) => t.id === track.id)
     const next = track.kind === 'video' ? (up ? i + 1 : i - 1) : (up ? i - 1 : i + 1)
     if (next < 0 || next >= same.length) return
     run('move_track', { track_id: track.id, index: next }).catch((e) => setError(e.message))
-  }
+  }, [project, run, setError])
 
-  const soloOn = (kind) => project.tracks.some((t) => t.kind === kind && t.solo)
-
-  // strisce e forme d'onda: una richiesta per media, poi solo CSS
-  useEffect(() => {
-    for (const m of project?.media || []) {
-      if (m.kind !== 'audio' && strips[m.id] === undefined) {
-        setStrips((s) => ({ ...s, [m.id]: null }))
-        api.strip(m.id, 44).then((info) => setStrips((s) => ({ ...s, [m.id]: info?.url ? info : null })))
-          .catch(() => {})
-      }
-      if (m.audio && waves[m.id] === undefined) {
-        setWaves((w) => ({ ...w, [m.id]: null }))
-        api.waveform(m.id).then((d) => setWaves((w) => ({ ...w, [m.id]: d })))
-          .catch(() => {})
-      }
+  /**
+   * Gli stacchi fra due clip attaccate.
+   *
+   * Sono il punto in cui si lascia una transizione, come negli altri montaggi:
+   * prima bisognava selezionare la clip e poi applicarla, e non era ovvio che
+   * la transizione fosse *della clip che finisce*.
+   */
+  const giunzioni = useCallback((track) => {
+    const ordinate = [...track.clips].sort((a, b) => a.start - b.start)
+    const out = []
+    for (let i = 0; i < ordinate.length - 1; i++) {
+      const a = ordinate[i]
+      const b = ordinate[i + 1]
+      if (Math.abs(b.start - a.end) > 0.001) continue   // c'e' un buco: niente stacco
+      out.push({ id: `${a.id}|${b.id}`, t: a.end, clip: a.id })
     }
-  }, [project?.media])
+    return out
+  }, [])
+
+  const soloOn = useCallback(
+    (kind) => project.tracks.some((t) => t.kind === kind && t.solo), [project])
+
+  useEffect(() => { dragRef.current = drag }, [drag])
 
   const timeAt = useCallback((clientX) => {
     const el = scrollRef.current
@@ -67,7 +83,7 @@ export default function Timeline({
   }, [pxPerSec])
 
   // ---- trascinamento di clip e maniglie di taglio -------------------------
-  const startDrag = (e, clip, type) => {
+  const startDrag = useCallback((e, clip, type) => {
     e.stopPropagation()
     e.preventDefault()
     setSelected(clip.id)
@@ -82,7 +98,7 @@ export default function Timeline({
       newStart: clip.start, newDuration: clip.duration, newIn: clip.in || 0,
       newTrack: clip.trackId, laneRects,
     })
-  }
+  }, [setSelected, timeAt])
 
   useEffect(() => {
     if (!drag) return
@@ -94,8 +110,20 @@ export default function Timeline({
       }
     }
     snapPoints.push(0, playhead)
-    const snap = (v) => {
-      const tol = SNAP_PX / pxPerSec
+
+    /**
+     * Aggancio ai bordi vicini.
+     *
+     * La tolleranza nasce in pixel, ma va usata in secondi: allontanando lo
+     * zoom quegli otto pixel diventavano quasi un secondo, e su una timeline
+     * fitta di stacchi ogni posizione finiva agganciata a qualcosa — la clip
+     * non si riusciva piu' a mettere dove si voleva. Il tetto di 0.25 s tiene
+     * l'aggancio utile da vicino e innocuo da lontano. Alt lo disattiva del
+     * tutto, come negli altri montaggi.
+     */
+    const snap = (v, libero) => {
+      if (libero) return v
+      const tol = Math.min(0.25, SNAP_PX / pxPerSec)
       let best = v, bestD = tol
       for (const p of snapPoints) {
         const d = Math.abs(p - v)
@@ -104,22 +132,27 @@ export default function Timeline({
       return best
     }
 
+    const corsie = () => Array.from(document.querySelectorAll('[data-lane]')).map((el) => ({
+      id: el.dataset.lane, kind: el.dataset.kind, rect: el.getBoundingClientRect(),
+    }))
+
     const onMove = (e) => {
+      const libero = e.altKey
       const dt = timeAt(e.clientX) - drag.t0
       setDrag((d) => {
         if (!d) return d
         const next = { ...d }
         if (d.type === 'move') {
-          next.newStart = Math.max(0, snap(d.start + dt))
-          const lane = d.laneRects.find(
+          next.newStart = Math.max(0, snap(d.start + dt, libero))
+          const lane = corsie().find(
             (l) => e.clientY >= l.rect.top && e.clientY <= l.rect.bottom && l.kind === d.kind)
           next.newTrack = lane ? lane.id : d.trackId
         } else if (d.type === 'trim-r') {
-          next.newDuration = Math.max(0.05, snap(d.start + d.duration + dt) - d.start)
+          next.newDuration = Math.max(0.05, snap(d.start + d.duration + dt, libero) - d.start)
         } else {
           // il bordo sinistro consuma sorgente: cambiano start, durata e attacco
           const limit = d.start + d.duration - 0.05
-          const ns = clamp(snap(d.start + dt), Math.max(0, d.start - d.in / d.speed), limit)
+          const ns = clamp(snap(d.start + dt, libero), Math.max(0, d.start - d.in / d.speed), limit)
           const shift = ns - d.start
           next.newStart = ns
           next.newDuration = d.duration - shift
@@ -130,21 +163,18 @@ export default function Timeline({
     }
 
     const onUp = () => {
-      setDrag((d) => {
-        if (!d) return null
-        const moved =
-          Math.abs(d.newStart - d.start) > 1e-3 ||
-          Math.abs(d.newDuration - d.duration) > 1e-3 ||
-          d.newTrack !== d.trackId
-        if (moved) {
-          const args = d.type === 'move'
-            ? { clip_id: d.id, start: round(d.newStart), track_id: d.newTrack }
-            : { clip_id: d.id, start: round(d.newStart), duration: round(d.newDuration), in_: round(d.newIn) }
-          const opName = d.type === 'move' ? 'move_clip' : 'set_clip'
-          run(opName, args).catch((err) => setError(err.message))
-        }
-        return null
-      })
+      const d = dragRef.current
+      setDrag(null)
+      if (!d) return
+      const moved =
+        Math.abs(d.newStart - d.start) > 1e-3 ||
+        Math.abs(d.newDuration - d.duration) > 1e-3 ||
+        d.newTrack !== d.trackId
+      if (!moved) return
+      const args = d.type === 'move'
+        ? { clip_id: d.id, start: round(d.newStart), track_id: d.newTrack }
+        : { clip_id: d.id, start: round(d.newStart), duration: round(d.newDuration), in_: round(d.newIn) }
+      run(d.type === 'move' ? 'move_clip' : 'set_clip', args).catch((err) => setError(err.message))
     }
 
     window.addEventListener('pointermove', onMove)
@@ -172,24 +202,22 @@ export default function Timeline({
     return out
   }, [pxPerSec, duration])
 
-  if (!project) return <div className="timeline" />
+  const mediaById = useMemo(
+    () => Object.fromEntries((project?.media || []).map((m) => [m.id, m])),
+    [project?.media])
 
-  const mediaById = Object.fromEntries((project.media || []).map((m) => [m.id, m]))
-
-  return (
-    <div className="timeline">
-      <div className="tl-scroll" ref={scrollRef}>
-        <div className="tl-inner" style={{ width }}>
-          <div className="ruler" style={{ width }} onPointerDown={scrub}>
-            {/* copre le tacche che scorrerebbero sotto la colonna dei nomi */}
-            <div className="corner" />
-            {ticks.map((t) => (
-              <div key={t} className="tick" style={{ left: HEAD + t * pxPerSec }}>
-                <span>{fmt(t)}</span>
-              </div>
-            ))}
-          </div>
-
+  /**
+   * Il corpo della timeline (tracce, clip, strisce di fotogrammi, forme d'onda)
+   * non dipende dalla posizione della testina: quella muove solo una riga
+   * verticale. Tenerlo in un memo a parte evita di ricostruire l'intero albero
+   * a ogni `pointermove` — su questo progetto sono 59 clip con immagini e SVG
+   * ridisegnate un centinaio di volte al secondo durante uno scrub, ed era il
+   * motivo per cui la timeline si impastava.
+   */
+  const corpo = useMemo(() => {
+    if (!project) return null
+    return (
+      <>
           {lanes.map((track) => {
             const off = track.kind === 'video' ? track.hidden : track.muted
             // con un solo attivo altrove la traccia non finisce nel render
@@ -200,44 +228,70 @@ export default function Timeline({
             // il nome e i pulsanti essenziali, cosi' 20 tracce restano leggibili
             const compact = trackH < 62
             return (
+            // stessa altezza per video e audio: la testata ha gli stessi comandi
+            // in entrambi i casi, quindi una traccia piu' bassa non li conterrebbe
             <div key={track.id}
-              style={{ height: track.kind === 'audio' ? Math.round(trackH * 0.85) : trackH }}
+              style={{ height: trackH }}
               className={`track ${track.kind} ${compact ? 'compact' : ''}`
                 + `${off || silenced ? ' off' : ''}${track.locked ? ' locked' : ''}`}>
               <div className="track-head">
                 <div className="trow">
-                  <span className="tname" title="doppio clic per rinominare"
-                    onDoubleClick={() => {
-                      const name = prompt('Nome della traccia', track.name || track.id)
-                      if (name !== null) set({ name: name.trim() })
-                    }}>{track.name || track.id}</span>
-                  <span className="spacer" />
-                  <button title="sposta in su" disabled={lanes[0]?.id === track.id}
-                    onClick={() => shiftTrack(track, true)}>▲</button>
-                  <button title="sposta in giu'"
+                  {renaming === track.id ? (
+                    <input
+                      className="rename" autoFocus defaultValue={track.name || track.id}
+                      onBlur={(e) => { set({ name: e.target.value.trim() }); setRenaming(null) }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                        if (e.key === 'Escape') setRenaming(null)
+                      }} />
+                  ) : (
+                    <span className="tname" title="Doppio clic per rinominare"
+                      onDoubleClick={() => setRenaming(track.id)}>{track.name || track.id}</span>
+                  )}
+                  <button className="icon sm" title="Sposta in su"
+                    disabled={lanes[0]?.id === track.id}
+                    onClick={() => shiftTrack(track, true)}><Icon name="su" size={13} /></button>
+                  <button className="icon sm" title="Sposta in giù"
                     disabled={lanes[lanes.length - 1]?.id === track.id}
-                    onClick={() => shiftTrack(track, false)}>▼</button>
+                    onClick={() => shiftTrack(track, false)}><Icon name="giu" size={13} /></button>
                 </div>
                 <div className="trow">
-                  <button className={off ? '' : 'on'}
-                    title={track.kind === 'video' ? 'mostra/nascondi' : 'attiva/silenzia'}
+                  <button className={`icon sm ${off ? '' : 'on'}`}
+                    title={track.kind === 'video'
+                      ? (track.hidden ? 'Traccia nascosta: clic per mostrarla' : 'Nascondi la traccia')
+                      : (track.muted ? 'Traccia silenziata: clic per riattivarla' : 'Silenzia la traccia')}
                     onClick={() => set(track.kind === 'video'
-                      ? { hidden: !track.hidden } : { muted: !track.muted })}
-                  >{track.kind === 'video' ? '👁' : '🔊'}</button>
-                  <button className={track.solo ? 'solo' : ''}
-                    title="solo: isola questa traccia"
-                    onClick={() => set({ solo: !track.solo })}>S</button>
-                  <button className={track.locked ? 'lock' : ''}
-                    title={track.locked ? 'traccia bloccata: clic per sbloccare'
-                      : 'blocca: protegge le clip dalle modifiche'}
-                    onClick={() => set({ locked: !track.locked })}>{track.locked ? '🔒' : '🔓'}</button>
+                      ? { hidden: !track.hidden } : { muted: !track.muted })}>
+                    <Icon size={14} name={track.kind === 'video'
+                      ? (track.hidden ? 'occhioNo' : 'occhio')
+                      : (track.muted ? 'altoparlanteNo' : 'altoparlante')} />
+                  </button>
+                  <button className={`icon sm ${track.solo ? 'solo' : ''}`}
+                    title={track.solo ? 'Solo attivo: clic per togliere' : 'Solo: isola questa traccia'}
+                    onClick={() => set({ solo: !track.solo })}
+                    style={{ fontSize: 10, fontWeight: 700 }}>S</button>
+                  <button className={`icon sm ${track.locked ? 'lock' : ''}`}
+                    title={track.locked ? 'Traccia bloccata: clic per sbloccare'
+                      : 'Blocca: protegge le clip dalle modifiche'}
+                    onClick={() => set({ locked: !track.locked })}>
+                    <Icon size={14} name={track.locked ? 'lucchetto' : 'lucchettoAperto'} />
+                  </button>
                   <span className="spacer" />
-                  <button title="elimina traccia" disabled={track.locked}
+                  <button className="icon sm danger" title="Elimina la traccia" disabled={track.locked}
                     onClick={() => {
-                      if (track.clips.length && !confirm(
-                        `${track.name || track.id} ha ${track.clips.length} clip. Eliminare la traccia?`)) return
-                      run('remove_track', { track_id: track.id }).catch((e) => setError(e.message))
-                    }}>✕</button>
+                      if (!track.clips.length) {
+                        run('remove_track', { track_id: track.id }).catch((e) => setError(e.message))
+                        return
+                      }
+                      ask({
+                        title: 'Eliminare la traccia?',
+                        message: `${track.name || track.id} contiene ${track.clips.length} clip. `
+                          + 'Verranno eliminate insieme alla traccia.',
+                        ok: 'elimina', danger: true,
+                        onOk: () => run('remove_track', { track_id: track.id })
+                          .catch((e) => setError(e.message)),
+                      })
+                    }}><Icon name="cestino" size={13} /></button>
                 </div>
                 <input
                   className="tvol" type="range" min="0" max="2" step="0.05"
@@ -284,7 +338,7 @@ export default function Timeline({
                       ].join(' ')}
                       style={{
                         left: start * pxPerSec, width: w,
-                        ...stripStyle(strips[clip.media], clip, inPoint, pxPerSec, track.kind),
+                        ...stripStyle(assets.strip(media), clip, inPoint, pxPerSec, track.kind),
                       }}
                       onPointerDown={(e) => startDrag(e, { ...clip, trackId: track.id, kind: track.kind }, 'move')}
                       onDragOver={(e) => {
@@ -308,7 +362,7 @@ export default function Timeline({
                         startDrag(e, { ...clip, trackId: track.id, kind: track.kind }, 'trim-l')} />
 
                       {track.kind === 'audio' && media?.audio && (
-                        <Wave peaks={waves[clip.media]?.peaks} media={media}
+                        <Wave peaks={assets.peaks(media)} media={media}
                           inPoint={inPoint} span={dur * (clip.speed || 1)} />
                       )}
 
@@ -339,6 +393,32 @@ export default function Timeline({
                 })}
 
                 {/* anteprima della clip trascinata su un'altra traccia */}
+                {/* bersagli per le transizioni lasciate sullo stacco */}
+                {track.kind === 'video' && giunzioni(track).map((g) => (
+                  <div
+                    key={g.id}
+                    className={`giunzione ${giunzione === g.id ? 'on' : ''}`}
+                    style={{ left: g.t * pxPerSec }}
+                    title="lascia qui una transizione"
+                    onDragOver={(e) => {
+                      if (!e.dataTransfer.types.includes('text/transition')) return
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setGiunzione(g.id)
+                    }}
+                    onDragLeave={() => setGiunzione((x) => (x === g.id ? null : x))}
+                    onDrop={(e) => {
+                      const tipo = e.dataTransfer.getData('text/transition')
+                      if (!tipo) return
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setGiunzione(null)
+                      const d = parseFloat(e.dataTransfer.getData('text/duration')) || 1
+                      onTransition?.(tipo, d, g.clip)
+                    }}
+                  />
+                ))}
+
                 {drag && drag.type === 'move' && drag.newTrack === track.id &&
                   drag.trackId !== track.id && (
                     <div className="clip sel" style={{
@@ -356,15 +436,40 @@ export default function Timeline({
           <div className="track addtrack">
             <div className="track-head">
               <button onClick={() => run('add_track', { kind: 'video' })
-                .catch((e) => setError(e.message))} title="nuova traccia video">+ video</button>
+                .catch((e) => setError(e.message))} title="Aggiungi una traccia video">
+                <Icon name="piu" size={13} />video</button>
               <button onClick={() => run('add_track', { kind: 'audio' })
-                .catch((e) => setError(e.message))} title="nuova traccia audio">+ audio</button>
+                .catch((e) => setError(e.message))} title="Aggiungi una traccia audio">
+                <Icon name="piu" size={13} />audio</button>
             </div>
             <div className="lane addhint hint">
               {project.tracks.filter((t) => t.kind === 'video').length} video ·{' '}
               {project.tracks.filter((t) => t.kind === 'audio').length} audio
             </div>
           </div>
+      </>
+    )
+  }, [project, lanes, drag, assets, selected, setSelected, pxPerSec, trackH,
+      renaming, mediaById, run, setError, onPreset, onTransition, ask, giunzione, giunzioni,
+      shiftTrack, soloOn, startDrag])
+
+  if (!project) return <div className="timeline" />
+
+  return (
+    <div className="timeline">
+      <div className="tl-scroll" ref={scrollRef}>
+        <div className="tl-inner" style={{ width }}>
+          <div className="ruler" style={{ width }} onPointerDown={scrub}>
+            {/* copre le tacche che scorrerebbero sotto la colonna dei nomi */}
+            <div className="corner" />
+            {ticks.map((t) => (
+              <div key={t} className="tick" style={{ left: HEAD + t * pxPerSec }}>
+                <span>{fmt(t)}</span>
+              </div>
+            ))}
+          </div>
+
+          {corpo}
 
           <div className="playhead" style={{ left: HEAD + playhead * pxPerSec }} />
         </div>

@@ -191,3 +191,24 @@ def test_render_in_background(client, tmp_path, assets):
         time.sleep(0.5)
     assert job["state"] == "done", job.get("error")
     assert Path(out).stat().st_size > 0
+
+
+@pytest.mark.slow
+def test_frame_prova_effetto_non_tocca_il_progetto(client, tmp_path, assets):
+    """L'anteprima al passaggio del mouse mostra l'effetto senza applicarlo."""
+    _create(client, tmp_path)
+    m = client.post("/api/op/import_media", json={"paths": [assets["red"]]}).json()
+    media_id = m["result"][0]["id"]
+    clip = client.post("/api/op/add_clip", json={"media_id": media_id}).json()["result"]["id"]
+
+    prima = client.get("/api/state").json()["revision"]
+    normale = client.get("/api/frame", params={"t": 1.0, "width": 240})
+    provato = client.get("/api/frame",
+                         params={"t": 1.0, "width": 240, "effect": "pixelate", "clip": clip})
+    assert normale.status_code == 200 and provato.status_code == 200
+    assert normale.content != provato.content        # l'effetto si vede
+    # la revisione e' l'impronta dell'intero progetto: se non cambia, l'effetto
+    # non e' finito da nessuna parte
+    assert client.get("/api/state").json()["revision"] == prima
+
+    assert client.get("/api/frame", params={"t": 1.0, "effect": "inesistente"}).status_code == 400

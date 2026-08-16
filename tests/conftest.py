@@ -52,3 +52,19 @@ def assets(tmp_path_factory) -> dict:
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
         ]),
     }
+
+
+@pytest.fixture(scope="session")
+def audio_con_copertina(assets, tmp_path_factory) -> str:
+    """Un mp3 con copertina incorporata: e' il caso che confonde ffprobe."""
+    d = tmp_path_factory.mktemp("cover")
+    out = d / "brano.mp3"
+    subprocess.run([
+        ffmpeg.binary("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=3",
+        "-i", assets["logo"],
+        "-map", "0:a", "-map", "1:v", "-c:a", "libmp3lame", "-c:v", "copy",
+        "-id3v2_version", "3", "-metadata:s:v", "title=Album cover",
+        "-disposition:v", "attached_pic", str(out),
+    ], check=True, capture_output=True)
+    return str(out)

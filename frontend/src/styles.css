@@ -1,216 +1,484 @@
+/* ==========================================================================
+   Sistema visivo
+   --------------------------------------------------------------------------
+   Un editor video sta sotto gli occhi per ore e la cosa importante a schermo e'
+   l'immagine, non l'interfaccia. Quindi: superfici neutre e scure, un solo
+   colore d'accento usato con parsimonia (selezione, testina, azione primaria,
+   fuoco), gerarchia fatta di tono e di filetti da 1px invece che di riquadri
+   colorati. Il colore vero e' riservato alle clip, dove porta informazione.
+   ========================================================================== */
+
 :root {
-  --bg: #101216;
-  --panel: #171a20;
-  --panel-2: #1e222a;
-  --line: #2a2f3a;
-  --text: #dfe3ea;
-  --dim: #8b93a3;
+  /* superfici, dalla piu' profonda alla piu' in rilievo */
+  --bg: #0d0f13;
+  --panel: #14171c;
+  --panel-2: #1b1f26;
+  --raised: #232830;
+  --line: #262b34;
+  --line-soft: #1e222a;
+
+  /* testo */
+  --text: #dde1e8;
+  --dim: #8a91a0;
+  --faint: #626a78;
+
+  /* accento: uno solo */
   --accent: #4c8dff;
-  --accent-2: #2f6fe0;
-  --video: #2f5d8c;
-  --audio: #2f7a63;
-  --text-clip: #6b4a8c;
-  --danger: #e05555;
-  --ok: #46b46e;
+  --accent-dim: #2f63bd;
+  --accent-soft: rgba(76, 141, 255, .14);
+
+  --danger: #e2585a;
+  --warn: #d9a441;
+  --ok: #4fae72;
+
+  /* clip: colori desaturati, leggibili anche affiancati */
+  --clip-video: #2c4f73;
+  --clip-audio: #2a6152;
+  --clip-text: #55407a;
+  --clip-color: #6d4a2c;
+
+  /* misure: una scala sola, usata ovunque */
+  --r-sm: 3px;
+  --r: 4px;
+  --r-lg: 7px;
+  --h-ctl: 26px;
+  --h-ctl-sm: 21px;
+
   /* colonna dei nomi traccia: stesso valore di HEAD in Timeline.jsx */
   --tl-head: 150px;
 }
 
 * { box-sizing: border-box; }
-
 html, body, #root { height: 100%; margin: 0; }
 
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  font: 12px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
   overflow: hidden;
   user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* il testo che l'utente puo' voler copiare resta selezionabile */
+input, textarea, .chatlog, .crumb, .path, .toast, .pdesc, .badge { user-select: text; }
+
+::selection { background: var(--accent-dim); color: #fff; }
+
+/* ------------------------------------------------------------ scorrimento */
+* { scrollbar-width: thin; scrollbar-color: #333a45 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #2f3540; border-radius: 6px; border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #3d4552; background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ---------------------------------------------------------------- comandi */
 button {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-2);
+  font: inherit; color: var(--text);
+  background: var(--raised);
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 5px 10px;
-  cursor: pointer;
+  border-radius: var(--r);
+  height: var(--h-ctl); padding: 0 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; white-space: nowrap;
+  transition: background .12s, border-color .12s, color .12s;
 }
-button:hover:not(:disabled) { background: #262b35; border-color: #3a4150; }
-button:disabled { opacity: .45; cursor: default; }
-button.primary { background: var(--accent-2); border-color: var(--accent); }
-button.primary:hover:not(:disabled) { background: var(--accent); }
-button.icon { padding: 4px 8px; }
+button:hover:not(:disabled) { background: #2b313b; border-color: #39404c; }
+button:active:not(:disabled) { background: #1f242c; }
+button:disabled { opacity: .4; cursor: default; }
 
-input, select, textarea {
-  font: inherit;
-  color: var(--text);
-  background: #0e1015;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 4px 6px;
-  width: 100%;
+button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+button.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+
+/* ghost: per le barre fitte, dove un bordo per pulsante farebbe rumore */
+button.ghost { background: transparent; border-color: transparent; color: var(--dim); }
+button.ghost:hover:not(:disabled) { background: var(--raised); color: var(--text); }
+
+/* quadrato, per le sole icone: bersaglio pieno anche senza etichetta */
+button.icon {
+  width: var(--h-ctl); padding: 0; flex: none;
+  background: transparent; border-color: transparent; color: var(--dim);
 }
-input[type=checkbox] { width: auto; }
-input[type=range] { padding: 0; background: none; border: none; }
-input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+button.icon:hover:not(:disabled) { background: var(--raised); color: var(--text); }
+button.icon.sm { width: var(--h-ctl-sm); height: var(--h-ctl-sm); }
+button.icon.danger:hover:not(:disabled) { background: #3a2326; color: var(--danger); }
+
+/* stato attivo: sfondo tenue, non un blocco pieno di colore */
+button.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+button.on:hover:not(:disabled) { background: rgba(76,141,255,.22); color: var(--accent); }
+
+.ico { flex: none; display: block; }
+
+/* ---------------------------------------------------------------- campi */
+input, select, textarea {
+  font: inherit; color: var(--text);
+  background: #0b0d11;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  height: var(--h-ctl); padding: 0 7px; width: 100%;
+}
+textarea { height: auto; padding: 5px 7px; line-height: 1.45; }
+select { padding-right: 4px; }
+input[type=checkbox] {
+  width: 15px; height: 15px; accent-color: var(--accent); padding: 0; flex: none;
+}
+input::placeholder, textarea::placeholder { color: var(--faint); }
+/* le frecce dei campi numerici sono minuscole e sempre storte: via, restano
+   rotellina e frecce da tastiera */
+input[type=number] { -moz-appearance: textfield; }
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+input:hover:not(:disabled), select:hover:not(:disabled) { border-color: #333a45; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+/* fuoco da tastiera visibile ovunque: senza, l'interfaccia e' inservibile senza mouse */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* cursori: pista sottile, pallino piccolo, come i fader di un mixer */
+input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  height: 16px; padding: 0; background: none; border: none; cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 2px; background: #2b313b;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 11px; height: 11px; margin-top: -4px;
+  border-radius: 50%; background: #b9c0cc; border: none;
+}
+input[type=range]:hover::-webkit-slider-thumb { background: #fff; }
+input[type=range]:active::-webkit-slider-thumb { background: var(--accent); }
+input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; background: #2b313b; }
+input[type=range]::-moz-range-thumb {
+  width: 11px; height: 11px; border-radius: 50%; background: #b9c0cc; border: none;
+}
 
 /* ---------------------------------------------------------------- layout */
 .app { display: flex; flex-direction: column; height: 100%; }
 
 .topbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+  flex: none; display: flex; align-items: center; gap: 3px;
+  padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
 }
-.topbar .name { font-weight: 600; margin-right: 4px; }
-.topbar .path { color: var(--dim); font-size: 11px; }
+.topbar .name {
+  font-weight: 600; font-size: 12px; letter-spacing: .04em;
+  color: var(--dim); margin-right: 10px;
+}
+/* separatore tra gruppi di comandi: dice "queste cose vanno insieme" */
+.topbar .sep { width: 1px; height: 16px; background: var(--line); margin: 0 7px; flex: none; }
+.topbar .path {
+  color: var(--faint); font-size: 11px; margin-right: 10px;
+  max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: right;
+}
 .spacer { flex: 1; }
 
 .middle { display: flex; flex: 1; min-height: 0; }
 
 .side {
-  width: 250px; background: var(--panel); border-right: 1px solid var(--line);
+  background: var(--panel); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
-.inspector {
-  width: 320px; background: var(--panel); border-left: 1px solid var(--line);
-  border-right: none; overflow-y: auto;
-}
+.inspector { background: var(--panel); overflow-y: auto; }
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 .section-title {
-  padding: 7px 10px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--dim); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 6px;
+  flex: none; padding: 0 10px; height: 30px;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 4px;
 }
-.section-title .spacer { flex: 1; }
+
+/* pannelli laterali a schede */
+.panel {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; background: var(--panel);
+}
+.panel > .side, .panel > .inspector, .panel > .chat { flex: 1; min-height: 0; }
+.panel > .side { border-right: none; }
+
+.tabs {
+  flex: none; display: flex; align-items: stretch; gap: 0;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.tabs button {
+  height: 32px; padding: 0 12px; border-radius: 0; gap: 6px;
+  background: transparent; border: none; color: var(--dim);
+  border-bottom: 2px solid transparent;
+}
+.tabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
+/* la scheda attiva si segnala con una riga sotto, non con un rettangolo */
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); background: transparent; }
+.tabs .spacer { flex: 1; }
 
 /* ---------------------------------------------------------------- media */
 .medialist { overflow-y: auto; flex: 1; }
 .media {
-  display: flex; gap: 8px; align-items: center; padding: 6px 10px;
-  border-bottom: 1px solid #1f2229; cursor: grab;
+  display: flex; gap: 9px; align-items: center; padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft); cursor: grab;
 }
 .media:hover { background: var(--panel-2); }
 .media .kind {
-  width: 22px; height: 22px; border-radius: 4px; flex: none;
-  display: grid; place-items: center; font-size: 11px; background: #262b35;
+  width: 24px; height: 24px; border-radius: var(--r); flex: none;
+  display: grid; place-items: center; background: var(--raised); color: var(--dim);
 }
-.media .meta { min-width: 0; }
+/* Anteprima del contenuto. La misura e' fissa e uguale nei tre casi (fotogramma,
+   onda, icona di attesa) cosi' l'elenco non si riassesta quando arrivano. */
+.media .thumb {
+  width: 52px; height: 30px; border-radius: 3px; flex: none;
+  background-color: #0d1014; background-repeat: no-repeat;
+  border: 1px solid var(--line-soft); overflow: hidden;
+}
+.media .thumb.vuoto { display: grid; place-items: center; color: var(--faint); }
+.media .thumb.onda {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1px; padding: 0 3px;
+}
+.media .thumb.onda i { flex: 1; background: var(--accent); opacity: .75; border-radius: 1px; }
+.media .meta { min-width: 0; flex: 1; }
 .media .mname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.media .msub { color: var(--dim); font-size: 11px; }
+.media .msub { color: var(--faint); font-size: 11px; }
+.media .icon { visibility: hidden; }
+.media:hover .icon, .media .icon:focus-visible { visibility: visible; }
 
-/* ---------------------------------------------------------------- preview */
+.folder {
+  display: flex; align-items: center; gap: 7px; padding: 6px 10px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line-soft);
+  cursor: pointer; color: var(--dim);
+}
+.folder:hover { color: var(--text); }
+.folder.vuota { font-style: italic; }
+.droptarget { outline: 2px dashed var(--accent); outline-offset: -2px; }
+
+/* ---------------------------------------------------------------- anteprima */
 /* minmax(0,1fr) e non "auto": una riga auto prende l'altezza nativa del video
    e max-height:100% si risolverebbe su se' stessa, sfondando il pannello */
 .preview {
   flex: 1; min-height: 0; min-width: 0; overflow: hidden;
   display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr);
-  place-items: center; background: #07080a; position: relative; padding: 10px;
+  place-items: center; background: #050607; position: relative; padding: 12px;
 }
 .preview img, .preview video {
   max-width: 100%; max-height: 100%; background: #000;
-  box-shadow: 0 2px 20px rgba(0,0,0,.6);
+  box-shadow: 0 4px 24px rgba(0,0,0,.7);
   grid-area: 1 / 1;   /* fotogramma e player nella stessa cella: si sovrappongono */
 }
-.preview .empty { color: var(--dim); text-align: center; }
+.preview .empty { color: var(--faint); text-align: center; line-height: 1.7; }
 .badge {
-  position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.65);
-  padding: 3px 8px; border-radius: 4px; font-size: 11px; color: var(--dim);
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(8,10,13,.82); backdrop-filter: blur(6px);
+  padding: 4px 8px; border-radius: var(--r); font-size: 11px; color: var(--dim);
+  border: 1px solid rgba(255,255,255,.06);
 }
+/* aggiornamento del fotogramma in corso: deve dire che il monitor e' vivo
+   senza rubare l'occhio, il fotogramma precedente resta leggibile sotto */
+.badge.sottile { opacity: .62; padding: 3px 7px; }
+/* anteprima di un effetto sotto il mouse: qui invece si deve notare, altrimenti
+   si crede che l'effetto sia stato applicato e lo si cerca fra quelli attivi */
+.badge.prova { border-color: var(--accent); color: var(--text); }
+
+/* ------------------------------------------------- campi del pannello */
+.num { display: flex; align-items: stretch; gap: 0; }
+.num input { flex: 1; min-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.numfrecce { display: flex; flex-direction: column; flex: none; }
+.numfrecce button {
+  width: 18px; flex: 1; padding: 0; min-height: 0; line-height: 0;
+  border: 1px solid var(--line-soft); border-left: none; border-radius: 0;
+  background: var(--raised); color: var(--dim);
+}
+.numfrecce button:first-child { border-top-right-radius: var(--r); border-bottom: none; }
+.numfrecce button:last-child { border-bottom-right-radius: var(--r); }
+.numfrecce button:hover { color: var(--text); background: var(--panel-2); }
+
+.rowextra { display: flex; align-items: center; gap: 2px; }
+/* il tasto di azzeramento resta invisibile finche' non c'e' niente da rimettere */
+.row .reset { opacity: 0; }
+.row:hover .reset.on, .row .reset.on:focus-visible { opacity: 1; }
+.group h4 .azzera { float: right; color: var(--faint); }
+.group h4 .azzera:hover { color: var(--text); }
+
+/* ------------------------------------------------- riproduzione in diretta */
+/* Il canvas ha le proporzioni del progetto; ogni clip e' un livello sovrapposto
+   nello stesso ordine del compilatore. */
+.live { position: absolute; inset: 0; display: grid; place-items: center; }
+.livecanvas { position: relative; overflow: hidden; background: #000; }
+.livelayer {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  transform-origin: center; will-change: transform, opacity;
+}
+.livetext { display: grid; place-items: center; text-align: center; pointer-events: none; }
+.livetext span { white-space: pre-wrap; font-family: 'Segoe UI', system-ui, sans-serif; font-weight: 900; }
+
+/* scelta fra diretta e fedele: sta nel trasporto, accanto al tempo */
+.transport .modo {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--raised); color: var(--dim); border: 1px solid var(--line-soft);
+}
+.transport .modo.on { color: var(--accent); border-color: var(--accent); }
+
+/* ------------------------------------------------- catalogo degli effetti */
+.fxgrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 6px; padding: 2px 0 8px;
+}
+.fxcard {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 9px 4px; min-height: 62px;
+  background: var(--raised); border: 1px solid var(--line-soft); border-radius: var(--r);
+  color: var(--dim); cursor: pointer; text-align: center;
+}
+.fxcard span {
+  font-size: 10.5px; line-height: 1.15; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.fxcard:hover, .fxcard:focus-visible {
+  color: var(--text); border-color: var(--accent); background: var(--panel-2);
+}
+.fxtitolo { margin-top: 14px; }
+.fxnota { margin: 2px 0 4px; }
+.badge.tc { font-variant-numeric: tabular-nums; }
 
 .transport {
-  flex: none;
-  display: flex; align-items: center; gap: 10px; padding: 6px 10px;
-  background: var(--panel); border-top: 1px solid var(--line);
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--panel); border-top: 1px solid var(--line);
 }
-.time { font-variant-numeric: tabular-nums; font-size: 12px; }
-.time b { color: var(--accent); }
+.transport .sep { width: 1px; height: 16px; background: var(--line); flex: none; }
+.time {
+  font-variant-numeric: tabular-nums; font-size: 12px; color: var(--dim);
+  letter-spacing: .02em;
+}
+.time b { color: var(--text); font-weight: 600; }
+/* etichetta di un cursore: piccola, spenta, senza gridare */
+.ctl { display: flex; align-items: center; gap: 6px; }
+.ctl > span { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 
 /* ---------------------------------------------------------------- timeline */
 /* l'altezza la decide il divisore trascinabile: qui si riempie il contenitore */
 .timeline {
   flex: 1; min-width: 0; height: 100%;
-  background: var(--panel); border-top: 1px solid var(--line);
+  background: var(--bg); border-top: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
 .tl-scroll { flex: 1; overflow: auto; position: relative; }
 .tl-inner { position: relative; min-width: 100%; }
 
 .ruler {
-  height: 24px; position: sticky; top: 0; z-index: 5;
-  background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: pointer;
+  height: 26px; position: sticky; top: 0; z-index: 5;
+  background: var(--panel); border-bottom: 1px solid var(--line); cursor: pointer;
 }
-.ruler .tick { position: absolute; top: 0; height: 100%; border-left: 1px solid #333a47; }
-.ruler .tick span { position: absolute; left: 3px; top: 4px; font-size: 10px; color: var(--dim); }
+.ruler .tick { position: absolute; top: 50%; bottom: 0; border-left: 1px solid #2e3540; }
+.ruler .tick span {
+  position: absolute; left: 4px; top: -13px; font-size: 10px; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
 .ruler .corner {
   position: sticky; left: 0; z-index: 2; width: var(--tl-head); height: 100%;
-  background: var(--panel-2); border-right: 1px solid var(--line);
+  background: var(--panel); border-right: 1px solid var(--line);
 }
 
 /* l'altezza arriva da JS (cursore "tracce"): qui solo il valore di ripiego */
-.track {
-  position: relative; border-bottom: 1px solid #22262e; height: 72px;
+.track { position: relative; border-bottom: 1px solid var(--line-soft); height: 72px; }
+.track.audio { background: rgba(255,255,255,.012); }
+
+.track-head {
+  position: sticky; left: 0; z-index: 7; width: var(--tl-head); height: 100%;
+  background: var(--panel); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 7px; gap: 3px; overflow: hidden;
 }
-.track.audio { background: #14171d; }
+.track-head .trow { display: flex; align-items: center; gap: 2px; }
+.track-head .tname {
+  font-size: 11px; font-weight: 600; letter-spacing: .02em; cursor: text;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0;
+}
+.track-head input.rename {
+  height: 18px; font-size: 11px; font-weight: 600; padding: 0 4px;
+}
+.track-head button { width: 20px; height: 18px; padding: 0; }
+.track-head .tvol { height: 12px; margin-top: 1px; }
+/* solo e blocco: tinta appena accennata, si notano senza dominare */
+.track-head button.solo { background: rgba(217,164,65,.18); color: var(--warn); border-color: transparent; }
+.track-head button.lock { background: rgba(226,88,90,.16); color: var(--danger); border-color: transparent; }
+
 /* tracce basse: si sacrifica il cursore del volume, non i pulsanti */
 .track.compact .tvol { display: none; }
-.track.compact .track-head { gap: 1px; padding: 0 4px; }
-.track.compact .track-head button { line-height: 13px; }
+.track.compact .track-head { gap: 1px; padding: 0 5px; }
 
 /* riga finale: aggiungere tracce non ha limiti, il posto e' qui */
-.track.addtrack { height: 34px; border-bottom: none; background: transparent; }
+.track.addtrack { height: 36px; border-bottom: none; background: transparent; }
 .track.addtrack .track-head {
-  flex-direction: row; align-items: center; gap: 4px; background: transparent;
-  border-right: 1px solid var(--line);
+  flex-direction: row; align-items: center; gap: 4px;
+  background: transparent; border-right: 1px solid var(--line);
 }
-.track.addtrack .track-head button { flex: 1; font-size: 10px; line-height: 18px; }
-.track.addtrack .addhint { display: flex; align-items: center; padding-left: 10px; }
+.track.addtrack .track-head button {
+  flex: 1; width: auto; height: 22px; font-size: 11px; gap: 4px;
+  background: transparent; border: 1px dashed var(--line); color: var(--dim);
+}
+.track.addtrack .track-head button:hover { border-style: solid; color: var(--text); }
+.track.addtrack .addhint {
+  display: flex; align-items: center; padding-left: 12px; color: var(--faint);
+}
+
 /* nascosta, silenziata o esclusa da un solo: non finisce nel render */
-.track.off .lane { opacity: .35; }
-.track.off .track-head .tname { color: var(--dim); text-decoration: line-through; }
+.track.off .lane { opacity: .3; }
+.track.off .track-head .tname { color: var(--faint); }
 .track.locked .lane { cursor: not-allowed; }
 .track.locked .lane::after {
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: repeating-linear-gradient(45deg,
-    rgba(255,255,255,.05) 0 8px, transparent 8px 16px);
+    rgba(255,255,255,.035) 0 7px, transparent 7px 14px);
 }
-.track-head {
-  position: sticky; left: 0; z-index: 7; width: var(--tl-head); height: 100%;
-  background: var(--panel-2); border-right: 1px solid var(--line);
-  display: flex; flex-direction: column; justify-content: center; padding: 0 6px; gap: 2px;
-}
-.track-head .tname {
-  font-size: 11px; font-weight: 600; cursor: text;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 84px;
-}
-.track-head .tbtns { display: flex; gap: 3px; }
-.track-head button { padding: 0 4px; font-size: 10px; line-height: 15px; }
-.track-head button.on { background: var(--accent-2); border-color: var(--accent); }
-.track-head button.solo { background: #b4902a; border-color: #e0c04a; color: #1a1a1a; }
-.track-head button.lock { background: #7a3f3f; border-color: var(--danger); }
+
 .lane { position: absolute; left: var(--tl-head); right: 0; top: 0; bottom: 0; }
 
 .clip {
-  position: absolute; top: 4px; bottom: 4px; border-radius: 4px;
-  background: var(--video); border: 1px solid rgba(255,255,255,.18);
+  position: absolute; top: 3px; bottom: 3px; border-radius: var(--r-sm);
+  background-color: var(--clip-video);
+  border: 1px solid rgba(0,0,0,.45);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
   overflow: hidden; cursor: grab; font-size: 11px;
 }
-.clip.audio { background: var(--audio); }
-.clip.text { background: var(--text-clip); }
-.clip.color { background: #7a5230; }
+.clip.audio { background-color: var(--clip-audio); }
+.clip.text { background-color: var(--clip-text); }
+.clip.color { background-color: var(--clip-color); }
 .clip.disabled { opacity: .4; }
-.clip.sel { outline: 2px solid var(--accent); outline-offset: -1px; z-index: 3; }
-.clip .label {
-  padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.6);
+.clip.sel {
+  outline: 2px solid var(--accent); outline-offset: -1px; z-index: 3;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 0 0 3px rgba(76,141,255,.18);
 }
-.clip .tags { padding: 0 6px; font-size: 10px; color: rgba(255,255,255,.72); pointer-events: none; }
-.clip .handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+.clip .label {
+  padding: 2px 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.75); font-weight: 500;
+}
+.clip .tags {
+  padding: 0 6px; font-size: 10px; color: rgba(255,255,255,.62);
+  pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.75);
+  font-variant-numeric: tabular-nums;
+}
+.clip .label, .clip .tags { position: relative; z-index: 2; }
+.clip .handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
 .clip .handle.l { left: 0; } .clip .handle.r { right: 0; }
-.clip .handle:hover { background: rgba(255,255,255,.35); }
-.clip .fade { position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(0,0,0,.65), transparent); pointer-events: none; }
-.clip .fade.out { background: linear-gradient(270deg, rgba(0,0,0,.65), transparent); }
+.clip .handle:hover { background: rgba(255,255,255,.28); }
+.clip .fade {
+  position: absolute; top: 0; bottom: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(0,0,0,.6), transparent);
+}
+.clip .fade.out { background: linear-gradient(270deg, rgba(0,0,0,.6), transparent); }
+.clip .trans {
+  position: absolute; right: 0; top: 0; bottom: 0; z-index: 2;
+  background: repeating-linear-gradient(45deg,
+    rgba(255,255,255,.18) 0 5px, rgba(255,255,255,.05) 5px 10px);
+  border-left: 1px solid rgba(255,255,255,.4);
+  display: grid; place-items: center; font-size: 10px; color: rgba(255,255,255,.85);
+  pointer-events: none; overflow: hidden; white-space: nowrap;
+}
+.wave { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .45; }
+.wave polygon { fill: #bce8d5; }
 
 .playhead {
   position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent);
@@ -219,182 +487,194 @@ input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(
 .playhead::before {
   content: ''; position: absolute; top: 0; left: -5px;
   border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-top: 8px solid var(--accent);
+  border-top: 9px solid var(--accent);
 }
 
-/* ---------------------------------------------------------------- inspector */
-.group { border-bottom: 1px solid var(--line); padding: 8px 10px; }
+/* ---------------------------------------------------------------- proprieta' */
+.group { border-bottom: 1px solid var(--line); padding: 10px; }
 .group h4 {
-  margin: 0 0 7px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--dim); display: flex; align-items: center; gap: 6px;
+  margin: 0 0 8px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint); display: flex; align-items: center; gap: 6px;
 }
-.row { display: grid; grid-template-columns: 74px 1fr auto; gap: 6px; align-items: center; margin-bottom: 5px; }
+.row {
+  display: grid; grid-template-columns: 78px 1fr auto; gap: 7px;
+  align-items: center; margin-bottom: 5px;
+}
 .row > label { color: var(--dim); font-size: 11px; }
 .row.wide { grid-template-columns: 1fr; }
-.kf-btn { padding: 2px 6px; font-size: 11px; line-height: 1.2; }
-.kf-btn.on { background: var(--accent-2); border-color: var(--accent); }
-.kf-list { margin: 4px 0 8px; padding: 5px; background: #0e1015; border: 1px solid var(--line); border-radius: 4px; }
+.kf-btn { width: var(--h-ctl-sm); height: var(--h-ctl-sm); padding: 0; }
+.kf-list {
+  margin: 4px 0 8px; padding: 6px; background: #0b0d11;
+  border: 1px solid var(--line); border-radius: var(--r);
+}
 .kf-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 4px; margin-bottom: 4px; }
-.kf-row input, .kf-row select { padding: 2px 4px; font-size: 11px; }
+.kf-row input, .kf-row select { height: var(--h-ctl-sm); padding: 0 5px; font-size: 11px; }
+.kf-row button { width: var(--h-ctl-sm); height: var(--h-ctl-sm); padding: 0; }
 
-.effect { background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 6px; margin-bottom: 6px; }
-.effect header { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; font-size: 12px; }
-.effect header .spacer { flex: 1; }
+.effect {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 8px; margin-bottom: 7px;
+}
+.effect header { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+.effect header b { font-weight: 600; }
+
+/* ---------------------------------------------------------------- libreria */
+.libgroup {
+  padding: 7px 10px 5px; font-size: 10px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faint); background: var(--panel);
+  border-bottom: 1px solid var(--line-soft); position: sticky; top: 0; z-index: 1;
+}
+.preset {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 7px 10px; border-bottom: 1px solid var(--line-soft); cursor: grab;
+}
+.preset:hover { background: var(--panel-2); }
+/* riquadro fisso: i nomi restano incolonnati anche dove l'icona manca */
+.preset .picon {
+  width: 26px; height: 26px; flex: none; border-radius: var(--r);
+  display: grid; place-items: center;
+  background: var(--raised); color: var(--dim);
+}
+.preset:hover .picon { color: var(--text); }
+.preset .ptesto { min-width: 0; flex: 1; }
+.preset .pname { font-size: 12px; }
+.preset .pdesc { color: var(--faint); font-size: 11px; margin-top: 2px; line-height: 1.4; }
+.libsearch { padding: 8px; border-bottom: 1px solid var(--line); position: relative; }
+.libsearch .ico { position: absolute; left: 16px; top: 50%; margin-top: -8px; color: var(--faint); }
+.libsearch input { padding-left: 28px; }
+.libfoot {
+  flex: none; padding: 7px 10px; border-top: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- assistente */
+.chat { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+.chatlog { flex: 1; overflow-y: auto; padding: 10px; }
+.msg {
+  border-radius: var(--r-lg); padding: 7px 10px; margin-bottom: 8px; font-size: 12px;
+  white-space: pre-wrap; word-break: break-word; line-height: 1.5;
+}
+.msg.user { background: var(--accent-dim); color: #fff; margin-left: 20px; }
+.msg.assistant { background: var(--panel-2); border: 1px solid var(--line); margin-right: 8px; }
+.toolrow { font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+.toolrow.ok { color: var(--dim); }
+.toolrow.ok .ico { color: var(--ok); }
+.toolrow.err { color: var(--danger); }
+.ico.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.chaterr { color: var(--danger); margin-top: 6px; font-size: 11px; }
+.chatbar {
+  flex: none; display: flex; gap: 6px; align-items: flex-end;
+  padding: 8px; border-top: 1px solid var(--line);
+}
+.chatbar textarea { resize: none; font-size: 12px; }
+.chatbar button { flex: none; }
+.chatempty { padding: 12px; color: var(--faint); font-size: 11px; line-height: 1.9; }
+.chatempty em { color: var(--dim); font-style: normal; }
 
 /* ---------------------------------------------------------------- dialoghi */
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 50;
+  position: fixed; inset: 0; background: rgba(0,0,0,.62);
+  backdrop-filter: blur(2px);
+  display: grid; place-items: center; z-index: 50;
 }
 .dialog {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
   width: 620px; max-width: 92vw; max-height: 86vh; display: flex; flex-direction: column;
-  box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  box-shadow: 0 16px 48px rgba(0,0,0,.6);
 }
-.dialog h3 { margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 14px; }
-.dialog .body { padding: 12px 14px; overflow-y: auto; }
-.dialog .foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; }
+.dialog.narrow { width: 400px; }
+.dialog h3 {
+  margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 600;
+}
+.dialog .body { padding: 14px 16px; overflow-y: auto; }
+.dialog .foot {
+  padding: 11px 16px; border-top: 1px solid var(--line);
+  display: flex; gap: 8px; justify-content: flex-end; align-items: center;
+}
+.dialog .foot .spacer { flex: 1; }
 
-.browser { height: 340px; overflow-y: auto; border: 1px solid var(--line); border-radius: 5px; background: #0e1015; }
-.browser .item { padding: 5px 9px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.browser {
+  height: 340px; overflow-y: auto; border: 1px solid var(--line);
+  border-radius: var(--r); background: #0b0d11;
+}
+.browser .item {
+  padding: 6px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center;
+  color: var(--text);
+}
+.browser .item .ico { color: var(--faint); }
 .browser .item:hover { background: var(--panel-2); }
-.browser .item.picked { background: var(--accent-2); }
-.crumb { font-size: 11px; color: var(--dim); margin-bottom: 6px; word-break: break-all; }
+.browser .item.picked { background: var(--accent-soft); color: var(--accent); }
+.browser .item.picked .ico { color: var(--accent); }
+.crumb { font-size: 11px; color: var(--faint); margin-bottom: 8px; word-break: break-all; }
 
+/* avviso: superficie neutra con un bordo colorato, non un blocco urlato */
 .toast {
-  position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-  background: var(--danger); color: #fff; padding: 8px 14px; border-radius: 6px;
-  z-index: 100; max-width: 70vw; box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-left: 3px solid var(--danger);
+  padding: 9px 14px; border-radius: var(--r); font-size: 12px;
+  z-index: 100; max-width: 60vw; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+  display: flex; align-items: center; gap: 10px;
 }
-.toast.ok { background: var(--ok); }
+.toast.ok { border-left-color: var(--accent); }
 
-.progress { height: 6px; background: #0e1015; border-radius: 3px; overflow: hidden; }
+.progress { height: 4px; background: #0b0d11; border-radius: 2px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); transition: width .2s; }
 
-.hint { color: var(--dim); font-size: 11px; }
-
-/* ---------------------------------------------------------------- divisori */
-.divider { flex: none; background: var(--line); }
-.divider.v { width: 4px; cursor: col-resize; }
-.divider.h { height: 4px; cursor: row-resize; }
-.divider:hover { background: var(--accent); }
-
-.side, .inspector { width: 100%; }
-.center > .divider.h { margin: 0; }
-
-/* ---------------------------------------------------------------- schede */
-.tabs {
-  flex: none;
-  display: flex; align-items: center; gap: 4px; padding: 5px 8px;
-  background: var(--panel); border-bottom: 1px solid var(--line);
-}
-.tabs button { padding: 3px 12px; font-size: 12px; background: transparent; border-color: transparent; }
-.tabs button.on { background: var(--panel-2); border-color: var(--line); }
-
-/* ---------------------------------------------------------------- bin */
-.folder {
-  display: flex; align-items: center; gap: 6px; padding: 5px 8px;
-  background: #1a1e25; border-bottom: 1px solid #22262e; cursor: pointer; font-size: 12px;
-}
-.folder.vuota { color: var(--dim); font-style: italic; }
-.droptarget { outline: 2px dashed var(--accent); outline-offset: -3px; }
-.media button.kf-btn { visibility: hidden; }
-.media:hover button.kf-btn { visibility: visible; }
+.hint { color: var(--faint); font-size: 11px; line-height: 1.6; }
 
 .dropzone {
-  position: fixed; inset: 20px; z-index: 60; pointer-events: none;
-  border: 3px dashed var(--accent); border-radius: 12px;
-  background: rgba(76,141,255,.10); display: grid; place-items: center;
-  font-size: 20px; color: var(--text);
+  position: fixed; inset: 16px; z-index: 60; pointer-events: none;
+  border: 2px dashed var(--accent); border-radius: var(--r-lg);
+  background: rgba(76,141,255,.07); display: grid; place-items: center;
+  font-size: 15px; color: var(--text);
 }
+
+/* ---------------------------------------------------------------- divisori */
+.divider { flex: none; background: var(--line); position: relative; }
+.divider.v { width: 1px; cursor: col-resize; }
+.divider.h { height: 1px; cursor: row-resize; }
+/* la zona di presa e' piu' larga della riga visibile: si azzecca al primo colpo */
+.divider::after { content: ''; position: absolute; inset: -3px; }
+.divider:hover { background: var(--accent); }
 
 /* ---------------------------------------------------------------- monitor sorgente */
 .source { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .srcbar {
-  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-  background: var(--panel); border-top: 1px solid var(--line);
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--panel); border-top: 1px solid var(--line);
 }
 
-/* ---------------------------------------------------------------- clip: strisce e onde */
-.clip { background-color: var(--video); }
-.clip .label, .clip .tags { position: relative; z-index: 2; }
-.clip.audio .label { text-shadow: 0 1px 3px rgba(0,0,0,.9); }
-.wave {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  pointer-events: none; opacity: .55;
-}
-.wave polygon { fill: #d8f5e8; }
-.clip .trans {
-  position: absolute; right: 0; top: 0; bottom: 0; z-index: 2;
-  background: repeating-linear-gradient(45deg, rgba(255,255,255,.22) 0 6px, rgba(255,255,255,.08) 6px 12px);
-  border-left: 1px solid rgba(255,255,255,.5);
-  display: grid; place-items: center; font-size: 10px; color: #fff;
-  pointer-events: none; overflow: hidden; white-space: nowrap;
-}
-
-.track-head .trow { display: flex; align-items: center; gap: 3px; }
-.track-head .tvol { height: 12px; margin-top: 3px; }
-
-/* ------------------------------------------------- pannelli a schede */
-/* contenitore dei pannelli laterali: schede in alto, contenuto che scorre */
-.panel {
-  flex: 1; min-width: 0; min-height: 0;
-  display: flex; flex-direction: column; background: var(--panel);
-}
-.panel > .side, .panel > .inspector, .panel > .chat { flex: 1; min-height: 0; }
-.panel > .inspector { border-left: none; }
-
-/* ---------------------------------------------------------------- libreria */
-.libtabs { border-bottom: 1px solid var(--line); }
-.libgroup {
-  padding: 6px 10px 4px; font-size: 10px; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--dim); background: #14171d;
-  border-bottom: 1px solid #1f2229; position: sticky; top: 0; z-index: 1;
-}
-.preset {
-  padding: 6px 10px; border-bottom: 1px solid #1f2229; cursor: grab;
-}
-.preset:hover { background: var(--panel-2); }
-.preset .pname { font-size: 12px; }
-.preset .pdesc { color: var(--dim); font-size: 11px; margin-top: 1px; }
-.libfoot {
-  flex: none; padding: 6px 10px; border-top: 1px solid var(--line);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
-/* ---------------------------------------------------------------- chat */
-.chat { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
-.chatlog { flex: 1; overflow-y: auto; padding: 8px; user-select: text; }
-.msg {
-  border-radius: 6px; padding: 6px 9px; margin-bottom: 7px; font-size: 12px;
-  white-space: pre-wrap; word-break: break-word;
-}
-.msg.user { background: var(--accent-2); }
-.msg.assistant { background: var(--panel-2); border: 1px solid var(--line); }
-.toolrow { font-size: 11px; color: var(--dim); margin-bottom: 3px; }
-.toolrow.ok { color: var(--ok); }
-.toolrow.err { color: var(--danger); }
-.chaterr { color: var(--danger); margin-top: 5px; }
-.chatbar {
-  flex: none; display: flex; gap: 6px; align-items: flex-end;
-  padding: 7px 8px; border-top: 1px solid var(--line);
-}
-.chatbar textarea { resize: none; font-size: 12px; }
-
-/* ---------------------------------------------------------------- gizmo */
+/* ---------------------------------------------------------------- riquadro trasformazione */
 .gizmo {
   position: absolute; border: 1px solid var(--accent);
   box-shadow: 0 0 0 1px rgba(0,0,0,.5) inset; cursor: move; z-index: 8;
 }
 .gizmo.locked { border-style: dashed; cursor: not-allowed; }
 .gizmo .gh {
-  position: absolute; width: 10px; height: 10px; background: var(--accent);
-  border: 1px solid #fff; border-radius: 2px;
+  position: absolute; width: 9px; height: 9px; background: var(--accent);
+  border: 1px solid rgba(255,255,255,.9); border-radius: 1px;
 }
 .gizmo .gh.tl { left: -5px; top: -5px; cursor: nwse-resize; }
 .gizmo .gh.tr { right: -5px; top: -5px; cursor: nesw-resize; }
 .gizmo .gh.bl { left: -5px; bottom: -5px; cursor: nesw-resize; }
 .gizmo .gh.br { right: -5px; bottom: -5px; cursor: nwse-resize; }
 .gizmo .gsize {
-  position: absolute; left: 0; top: -18px; font-size: 10px; color: var(--accent);
-  background: rgba(0,0,0,.6); padding: 0 4px; border-radius: 3px;
+  position: absolute; left: 0; top: -19px; font-size: 10px; color: var(--accent);
+  background: rgba(0,0,0,.7); padding: 1px 5px; border-radius: var(--r-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacco fra due clip: bersaglio per le transizioni trascinate. Invisibile
+   finche' non ci passa sopra qualcosa — altrimenti sarebbe una riga in piu' su
+   ogni taglio, e su una timeline fitta diventerebbe rumore. */
+.giunzione {
+  position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px;
+  z-index: 3; border-radius: 3px;
+}
+.giunzione.on {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: 0 0 0 1px var(--accent);
 }

@@ -20,8 +20,9 @@ from typing import Any
 import anyio
 from mcp.server.mcpserver import Image, MCPServer
 
+from . import analyze, captions, cleanup, colormatch, ops
 from . import effects as fx
-from . import ffmpeg, hw, probe, proxy, render
+from . import ffmpeg, hw, probe, proxy, render, review, story, versions, vision
 from .model import TRANSITIONS
 from .store import EditError, Store
 
@@ -98,7 +99,13 @@ def project_create(path: str, name: str = "untitled", preset: str = "1080p",
 @mcp.tool()
 def project_open(path: str) -> dict:
     """Apre un progetto esistente (.json) e lo rende quello corrente."""
-    return _store(path).summary()
+    # sempre riletto da disco: il file puo' essere cambiato dalla UI o da un
+    # altro processo, e la copia in memoria mostrerebbe uno stato vecchio.
+    # Non si perde nulla: ogni modifica viene gia' salvata subito (autosave).
+    key = str(Path(path).resolve())
+    _stores[key] = Store.open(key)
+    _current[0] = key
+    return _stores[key].summary()
 
 
 @mcp.tool()
@@ -485,6 +492,228 @@ async def audio_levels(clip: str | None = None, project: str | None = None) -> d
 
 
 # --------------------------------------------------------------------------
+# analisi del materiale
+# --------------------------------------------------------------------------
+
+
+def _source(path: str | None, clip: str | None, project: str | None) -> str:
+    """Percorso del file da analizzare, da path esplicito o da una clip."""
+    if path:
+        p = Path(path)
+        if not p.exists():
+            raise EditError(f"file non trovato: {path}")
+        return str(p.resolve())
+    if not clip:
+        raise EditError("serve path oppure clip")
+    s = _store(project)
+    _, c = s.clip_or_die(clip)
+    if not c.media:
+        raise EditError(f"la clip {clip} non ha un file sorgente")
+    return s.media_or_die(c.media).path
+
+
+@mcp.tool()
+async def inspect_footage(path: str | None = None, clip: str | None = None,
+                          deep: bool = False, model: str = "small",
+                          language: str | None = None,
+                          project: str | None = None) -> dict:
+    """Che cosa c'e' dentro il girato: tagli, silenzi, buio, fuori fuoco, verdetto.
+
+    Ritorna verdict = keep | trim | drop, gli ``issues`` che lo giustificano e
+    suggested_in/out per accorciare. deep=True aggiunge la trascrizione (piu'
+    lento la prima volta, poi e' in cache).
+
+    Serve prima di montare: dice quali clip scartare e dove tagliarle.
+    """
+    src = _source(path, clip, project)
+    return await _off(analyze.report, src, deep, model_size=model, language=language)
+
+
+@mcp.tool()
+async def transcribe(path: str | None = None, clip: str | None = None,
+                     model: str = "small", language: str | None = None,
+                     with_words: bool = False, project: str | None = None) -> dict:
+    """Trascrive il parlato con i tempi, per capire il contenuto e dove tagliare.
+
+    with_words=True aggiunge i timestamp per singola parola (serve per tagliare
+    sulla pausa esatta o censurare una parola sola); senza, restituisce solo le
+    frasi con inizio/fine, che e' molto piu' compatto da leggere.
+    """
+    src = _source(path, clip, project)
+    tr = await _off(analyze.transcribe, src, model, language)
+    segs = [{"t": s["start"], "e": s["end"], "text": s["text"]}
+            if not with_words else s for s in tr["segments"]]
+    return {"language": tr["language"], "words_per_minute": tr["words_per_minute"],
+            "speech_seconds": tr["speech_seconds"], "text": tr["text"],
+            "segments": segs}
+
+
+@mcp.tool()
+async def list_styles() -> dict:
+    """Gli stili di montaggio disponibili e i numeri che li definiscono."""
+    return {"stili": [{"nome": s.name, "label": s.label, "desc": s.desc,
+                       "taglio_s": [s.shot_min, s.shot_max],
+                       "apre_col_meglio": s.hook_first,
+                       "transizione": s.transition} for s in story.STYLES.values()]}
+
+
+@mcp.tool()
+async def plan_edit(folder: str | None = None, files: list[str] | None = None,
+                    style: str = "vlog", target_duration: float | None = None,
+                    deep: bool = False, apply: bool = False, order: str = "score",
+                    project: str | None = None) -> dict:
+    """Da una cartella di girato alla scaletta: cosa entra, in che ordine, per quanto.
+
+    Analizza tutto il materiale, scarta l'inutilizzabile e i doppioni, ordina
+    secondo l'arco (apertura, salita, picco al 75%, chiusura) ed evita due
+    inquadrature simili di fila. Ogni clip esce con il suo *perche'*.
+
+    style: shortform | vlog | documentary | cinematic (vedi list_styles).
+    order: score (per punteggio) | chrono (data di ripresa vera, letta dai tag
+    del file) | name. Con chrono/name l'apertura, il picco e la chiusura restano
+    comunque scelti per punteggio: sono decisioni di ritmo.
+    deep=True usa la trascrizione per pesare il parlato (piu' lento).
+    apply=True costruisce davvero la timeline nel progetto corrente.
+
+    Il piano va letto prima di applicarlo: e' li' che si discute il montaggio.
+    """
+    src = files if files else folder
+    if not src:
+        raise EditError("serve folder oppure files")
+    p = await _off(story.plan, src, style, target_duration, deep, True, order)
+    if apply:
+        p["applicato"] = story.apply_plan(_store(project), p)
+    return p
+
+
+@mcp.tool()
+async def match_color(clip: str, reference: str, strength: float = 1.0,
+                      apply: bool = True, project: str | None = None) -> dict:
+    """Uniforma il colore di una clip a quello di una clip di riferimento.
+
+    ``reference`` puo' essere l'id di un'altra clip o il percorso di un file.
+    Allinea esposizione e dominante (media e deviazione per canale): serve a far
+    sembrare girate insieme riprese fatte con camere o luci diverse.
+
+    strength 0.5-0.7 quando le due inquadrature hanno contenuto molto diverso:
+    al 100% le statistiche di un cielo trascinerebbero un primo piano.
+    """
+    s = _store(project)
+    src = _source(None, clip, project)
+    try:
+        ref = _source(None, reference, project)
+    except EditError:
+        ref = _source(reference, None, project)
+    res = await _off(colormatch.match, src, ref, strength)
+    if apply:
+        s.add_effect(clip, "colormatch", res["params"])
+    return {"params": res["params"], "distanza_prima": res["distanza_prima"],
+            "applicato": apply,
+            "sorgente": res["sorgente"]["mean"], "riferimento": res["riferimento"]["mean"]}
+
+
+@mcp.tool()
+async def make_captions(clip: str | None = None, path: str | None = None,
+                        output: str | None = None, format: str = "ass",
+                        karaoke: bool = True, burn: bool = True,
+                        max_chars: int = 42, uppercase: bool = False,
+                        size: int = 64, primary: str = "#FFE100",
+                        secondary: str = "#FFFFFF", margin_v: int = 120,
+                        model: str = "small", language: str | None = None,
+                        project: str | None = None) -> dict:
+    """Genera i sottotitoli dal parlato e (se burn) li imprime sulla clip.
+
+    format: ass (consigliato, porta il karaoke parola per parola stile
+    TikTok/Reel) | srt | vtt. I colori sono #RRGGBB: ``primary`` e' la parola
+    gia' pronunciata, ``secondary`` quella che deve ancora arrivare.
+
+    Con ``clip`` i tempi vengono riportati all'inizio della clip, cosi' i
+    sottotitoli restano in sincrono anche se la clip parte a meta' del file.
+    """
+    s = _store(project) if (clip or burn or project) else None
+    src = _source(path, clip, project)
+    tr = await _off(analyze.transcribe, src, model, language)
+
+    offset = 0.0
+    larghezza, altezza = 1080, 1920
+    if clip:
+        _, c = s.clip_or_die(clip)
+        offset = c.in_
+        larghezza, altezza = s.project.settings.width, s.project.settings.height
+
+    righe = captions.group_words(tr, max_chars=max_chars, offset=offset)
+    righe = [r for r in righe if r["end"] > 0]
+    if not righe:
+        return {"righe": 0, "file": None, "nota": "nessun parlato riconosciuto"}
+
+    out = output or str(Path(tempfile.gettempdir()) / f"vedit_captions_{os.getpid()}.{format}")
+    st = captions.CaptionStyle(size=size, primary=primary, secondary=secondary,
+                               margin_v=margin_v, uppercase=uppercase)
+    kw = {"style": st, "karaoke": karaoke, "width": larghezza, "height": altezza} \
+        if format == "ass" else {}
+    file = await _off(captions.write, out, righe, format, **kw)
+
+    applicato = False
+    if burn and clip:
+        s.add_effect(clip, "subtitles", {"file": file})
+        applicato = True
+    return {"righe": len(righe), "file": file, "formato": format,
+            "karaoke": karaoke and format == "ass", "applicato": applicato,
+            "anteprima": [{"t": r["start"], "text": r["text"]} for r in righe[:5]]}
+
+
+@mcp.tool()
+async def tighten_speech(clip: str, min_silence: float = 0.5, pad: float = 0.12,
+                         fillers: bool = True, extra_fillers: list[str] | None = None,
+                         ripple: bool = True, model: str = "small",
+                         language: str | None = None,
+                         project: str | None = None) -> dict:
+    """Stringe una clip parlata: via le pause lunghe e le esitazioni ("ehm", "uh").
+
+    I tagli avvengono sulla timeline (split + rimozione), quindi si annullano con
+    undo e il file originale non viene toccato. ``pad`` e' l'aria lasciata
+    attorno alla voce: alzalo se il parlato risulta tagliato sull'attacco.
+
+    extra_fillers aggiunge parole alla lista: usalo per "tipo", "cioe'",
+    "allora", che di default NON vengono tolte perche' spesso sono parole vere.
+    """
+    s = _store(project)
+    return await _off(cleanup.tighten, s, clip, min_silence, pad, fillers,
+                      tuple(extra_fillers or ()), ripple, model, language)
+
+
+@mcp.tool()
+async def censor_speech(clip: str, words: list[str] | None = None,
+                        mode: str = "mute", pad: float = 0.08,
+                        model: str = "small", language: str | None = None,
+                        project: str | None = None) -> dict:
+    """Trova le parole da censurare nella clip e applica la censura audio.
+
+    ``words`` si aggiunge alla lista predefinita. mode: mute (silenzio) oppure
+    scramble (voce resa incomprensibile ma udibile). Ritorna gli intervalli
+    trovati: se sono sbagliati, si rimuove l'effetto e si rifa con pad diverso.
+    """
+    s = _store(project)
+    src = _source(None, clip, project)
+    spans = await _off(analyze.censor_spans, src, tuple(words or ()), pad, model, language)
+    if not spans:
+        return {"trovati": 0, "intervalli": [], "effetto": None}
+    # i tempi della trascrizione sono relativi al file: la clip parte da in_
+    _, c = s.clip_or_die(clip)
+    rel = [{"start": round(sp["start"] - c.in_, 3), "end": round(sp["end"] - c.in_, 3),
+            "word": sp["word"]}
+           for sp in spans
+           if sp["end"] > c.in_ and sp["start"] < c.in_ + c.source_duration()]
+    if not rel:
+        return {"trovati": 0, "intervalli": [], "effetto": None,
+                "nota": "parole trovate nel file ma fuori dal tratto usato dalla clip"}
+    s.add_effect(clip, "censor", {"ranges": analyze.ranges_expr(rel), "mode": mode})
+    _, c2 = s.clip_or_die(clip)
+    return {"trovati": len(rel), "intervalli": rel,
+            "effetto": {"type": "censor", "index": len(c2.effects) - 1, "mode": mode}}
+
+
+# --------------------------------------------------------------------------
 # preview e render
 # --------------------------------------------------------------------------
 
@@ -501,6 +730,268 @@ async def preview_frame(t: float, width: int = 640, path: str | None = None,
     out = path or str(Path(tempfile.gettempdir()) / f"vedit_preview_{os.getpid()}.jpg")
     p = await _off(render.render_frame, s.project, t, out, width, True)
     return Image(path=p)
+
+
+@mcp.tool()
+async def detect_subjects(clip: str | None = None, path: str | None = None,
+                          classes: list[str] | None = None, fps: float = 2.0,
+                          conf: float = 0.35, project: str | None = None) -> dict:
+    """Dove sta il soggetto, fotogramma per fotogramma (YOLO).
+
+    Ritorna la traccia gia' levigata: posizione del centro nel tempo, copertura
+    (in quanti fotogrammi il soggetto e' stato visto) e le classi trovate.
+    Serve per mascherare un volto, tenere una persona al centro, evitare di
+    coprirla col testo. classes vuoto = solo persone.
+    """
+    src = _source(path, clip, project)
+    res = await _off(vision.follow, src, tuple(classes or ("person",)), fps, conf)
+    return {"larghezza": res["larghezza"], "altezza": res["altezza"],
+            "copertura": res["copertura"], "classi": res["classi"],
+            "campioni": len(res["traccia"]),
+            "traccia": [{"t": p["t"], "cx": p["cx"], "cy": p["cy"]}
+                        for p in res["traccia"]]}
+
+
+@mcp.tool()
+async def auto_reframe(clip: str, classes: list[str] | None = None, fps: float = 2.0,
+                       apply: bool = True, project: str | None = None) -> dict:
+    """Tiene il soggetto al centro quando cambia il formato (16:9 -> 9:16).
+
+    Imposta prima il progetto al formato voluto (project_settings preset
+    'vertical'), poi chiama questo: calcola l'ingrandimento che copre il canvas e
+    la panoramica che segue il soggetto, come keyframe sulla trasformazione.
+
+    La panoramica e' limitata ai bordi dell'immagine, quindi non compare mai il
+    vuoto ai lati.
+    """
+    s = _store(project)
+    src = _source(None, clip, project)
+    res = await _off(vision.follow, src, tuple(classes or ("person",)), fps)
+    st = s.project.settings
+    kf = vision.reframe_keyframes(res["traccia"], res["larghezza"], res["altezza"],
+                                  st.width, st.height)
+    if apply:
+        s.set_transform(clip, scale=kf["scale"], x=kf["x"], y=kf["y"])
+    return {"scale": kf["scale"], "copertura": res["copertura"],
+            "punti": len(kf["x"]["kf"]), "limite_x": kf["limite_x"],
+            "applicato": apply,
+            "nota": "copertura bassa: il soggetto non e' stato visto spesso, "
+                    "controlla con preview_grid" if res["copertura"] < 0.5 else None}
+
+
+@mcp.tool()
+async def track_mask(clip: str, kind: str = "mask_blur", padding: float = 1.25,
+                     classes: list[str] | None = None, fps: float = 2.0,
+                     project: str | None = None) -> dict:
+    """Applica una maschera che segue il soggetto (volto, persona, targa).
+
+    kind: mask_blur | mask_pixelate | mask_box. La maschera e' un riquadro con
+    x/y animati sui keyframe del tracking, quindi resta addosso al soggetto
+    invece di stare ferma.
+    """
+    if kind not in ("mask_blur", "mask_pixelate", "mask_box"):
+        raise EditError("kind deve essere mask_blur | mask_pixelate | mask_box")
+    s = _store(project)
+    src = _source(None, clip, project)
+    res = await _off(vision.follow, src, tuple(classes or ("person",)), fps)
+    m = vision.mask_keyframes(res["traccia"], padding)
+    s.add_effect(clip, kind, {"x": m["x"], "y": m["y"], "w": m["w"], "h": m["h"]})
+    return {"effetto": kind, "w": m["w"], "h": m["h"],
+            "punti": len(m["x"]["kf"]), "copertura": res["copertura"]}
+
+
+@mcp.tool()
+async def preview_grid(count: int = 12, width: int = 320, cols: int = 4,
+                       start: float | None = None, end: float | None = None,
+                       path: str | None = None, project: str | None = None) -> Image:
+    """Griglia di fotogrammi della timeline: il montaggio si vede tutto insieme.
+
+    Un solo fotogramma non dice niente sul ritmo. Qui ogni riquadro porta il suo
+    tempo stampato sopra, quindi si leggono stacchi, continuita' e buchi in un
+    colpo d'occhio. Usalo dopo ogni modifica strutturale, prima di renderizzare.
+    """
+    s = _store(project)
+    out = path or str(Path(tempfile.gettempdir()) / f"vedit_grid_{os.getpid()}.jpg")
+    res = await _off(review.contact_sheet, s.project, out, count, width, cols, start, end)
+    return Image(path=res["file"])
+
+
+@mcp.tool()
+async def audio_waveform(start: float | None = None, end: float | None = None,
+                         points: int = 120, project: str | None = None) -> dict:
+    """Picchi audio del mix renderizzato in un intervallo, piu' i livelli.
+
+    Serve a vedere dove sta davvero il suono: se un taglio cade in mezzo a una
+    parola, se un tratto e' muto, se il livello e' troppo basso. I picchi sono
+    0..1, i livelli in dBFS.
+    """
+    return await _off(review.waveform, _store(project).project, start, end, points)
+
+
+@mcp.tool()
+async def check_cuts(clip: str, model: str = "small", language: str | None = None,
+                     project: str | None = None) -> dict:
+    """Controlla che i bordi della clip non taglino a meta' una parola.
+
+    Ritorna il punto suggerito per ogni bordo sbagliato: e' l'errore piu' comune
+    del taglio automatico e si sente subito all'ascolto.
+    """
+    return await _off(review.cuts_on_speech, _store(project), clip, model, language)
+
+
+@mcp.tool()
+def marker(t: float, note: str = "", kind: str = "nota", duration: float = 0.0,
+           project: str | None = None) -> dict:
+    """Ancora una nota a un istante della timeline.
+
+    kind: nota | da_fare | problema | approvato. duration > 0 marca una regione.
+    E' la memoria del montaggio tra una sessione e l'altra: perche' un taglio
+    sta li', cosa manca, dove qualcuno ha detto che non funziona.
+    """
+    return versions.add_marker(_store(project), t, note, kind, duration)
+
+
+@mcp.tool()
+def markers(kind: str | None = None, start: float | None = None,
+            end: float | None = None, project: str | None = None) -> list[dict]:
+    """I marker del progetto, filtrabili per tipo e per tratto."""
+    return versions.markers(_store(project), kind, start, end)
+
+
+@mcp.tool()
+def remove_marker(marker_id: str, project: str | None = None) -> dict:
+    """Toglie un marker."""
+    return versions.remove_marker(_store(project), marker_id)
+
+
+@mcp.tool()
+def snapshot(name: str, note: str = "", project: str | None = None) -> dict:
+    """Salva una versione nominata del montaggio, senza toccare quello corrente.
+
+    Undo torna indietro; questo permette di tenere due montaggi diversi e
+    sceglierli dopo averli confrontati.
+    """
+    return versions.snapshot(_store(project), name, note)
+
+
+@mcp.tool()
+def snapshots(project: str | None = None) -> list[dict]:
+    """Le versioni salvate, dalla piu' recente."""
+    return versions.snapshots(_store(project))
+
+
+@mcp.tool()
+def restore_snapshot(name: str, project: str | None = None) -> dict:
+    """Riporta il progetto a una versione salvata. Si annulla con undo."""
+    return versions.restore(_store(project), name)
+
+
+@mcp.tool()
+def compare_versions(a: str, b: str | None = None,
+                     project: str | None = None) -> dict:
+    """Cosa cambia tra due versioni (o tra una versione e il montaggio corrente).
+
+    Dice quante clip sono state aggiunte, tolte o spostate e come cambia la
+    durata: si sceglie leggendo, senza dover guardare due volte lo stesso video.
+    """
+    return versions.compare(_store(project), a, b)
+
+
+@mcp.tool()
+async def preview_clip(start: float | None = None, end: float | None = None,
+                       height: int = 360, max_seconds: float = 30.0,
+                       output: str | None = None, project: str | None = None) -> dict:
+    """Renderizza un tratto breve e lascia il file: un'anteprima da guardare.
+
+    preview_grid mostra la struttura, questo mostra il risultato. E' il modo per
+    far dire a una persona "qui non funziona" invece di chiederle fiducia.
+    Oltre max_seconds viene troncata: per il resto c'e' render_video.
+    """
+    return await _off(review.preview_clip, _store(project).project, output,
+                      start, end, height, max_seconds)
+
+
+@mcp.tool()
+async def color_scopes(t: float, project: str | None = None) -> dict:
+    """Misure del colore su un fotogramma: esposizione, clipping, dominante.
+
+    Serve a giudicare il colore con dei numeri invece che a occhio su uno
+    schermo non calibrato. Gli avvisi dicono cosa non va: sottoesposta, alte
+    luci bruciate, dominante, immagine piatta.
+    """
+    return await _off(review.scopes, _store(project).project, t)
+
+
+@mcp.tool()
+def insert_clip(media: str, at: float, track: str | None = None,
+                duration: float | None = None, in_point: float = 0.0,
+                project: str | None = None) -> dict:
+    """Inserisce una clip spingendo a destra tutto quello che segue.
+
+    Se una clip sta a cavallo del punto di inserimento viene divisa. E'
+    l'inserimento vero: add_clip invece appoggia e sovrappone.
+    """
+    return ops.insert_clip(_store(project), media, at, track, duration, in_point)
+
+
+@mcp.tool()
+def smooth_cuts(track: str | None = None, duration: float = 0.06,
+                project: str | None = None) -> dict:
+    """Micro-dissolvenza audio su ogni giunzione tra clip.
+
+    Dopo un taglio netto sull'audio si sente un click: due o tre fotogrammi di
+    sfumatura lo tolgono senza che si percepisca la dissolvenza. Da usare dopo
+    tighten_speech o dopo qualunque serie di tagli.
+    """
+    return ops.smooth_cuts(_store(project), track, duration)
+
+
+@mcp.tool()
+async def duck_music(music: str, voice: str, amount_db: float = -12.0,
+                     attack: float = 0.25, release: float = 0.6,
+                     project: str | None = None) -> dict:
+    """Abbassa la musica quando la voce parla (automazione del volume).
+
+    Non e' un compressore sidechain: sono keyframe veri sul guadagno della clip
+    musicale, quindi si vedono nel progetto, si correggono a mano e si annullano
+    con undo. attack basso = stacco netto; release alto = rientro morbido.
+    """
+    return await _off(ops.duck_music, _store(project), music, voice,
+                      amount_db, attack, release)
+
+
+@mcp.tool()
+def detach_audio(clip: str, track: str | None = None,
+                 project: str | None = None) -> dict:
+    """Porta l'audio della clip su una traccia separata e muta l'originale.
+
+    Da qui audio e video si muovono indipendenti: e' il presupposto del J/L cut.
+    """
+    return ops.detach_audio(_store(project), clip, track)
+
+
+@mcp.tool()
+def jl_cut(clip: str, seconds: float = 0.5, kind: str = "J",
+           project: str | None = None) -> dict:
+    """J cut: l'audio entra prima dell'immagine. L cut: continua dopo lo stacco.
+
+    E' la tecnica che rende invisibile il montaggio di un dialogo. Se l'audio
+    non e' ancora scollegato viene scollegato in automatico; se manca materiale
+    prima o dopo, lo dice invece di inventarselo.
+    """
+    return ops.jl_cut(_store(project), clip, seconds, kind)
+
+
+@mcp.tool()
+async def verify_edit(start: float | None = None, end: float | None = None,
+                      height: int = 270, project: str | None = None) -> dict:
+    """Renderizza davvero un tratto e verifica che sia quello che la timeline dice.
+
+    Confronta gli stacchi attesi con quelli misurati sul file renderizzato, la
+    durata, i tratti neri o muti. E' la differenza tra "credo di aver montato" e
+    "ho verificato": usalo prima di consegnare un render lungo.
+    """
+    return await _off(review.verify, _store(project).project, start, end, height)
 
 
 @mcp.tool()

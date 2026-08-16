@@ -12,7 +12,7 @@ import re
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -168,7 +168,8 @@ def build_command(project: Project, opts: RenderOptions, workdir: Path) -> tuple
         width=opts.width, height=opts.height, fps=opts.fps,
         use_proxy=opts.use_proxy, audio=want_audio, video=want_video,
         start=opts.start, end=opts.end, workdir=str(workdir),
-        hwaccel=opts.prefer_hw and info.is_hw(enc), stab_files=stab,
+        hwaccel=info.hwaccel if (opts.prefer_hw and info.is_hw(enc)) else "",
+        stab_files=stab,
     )
     c = compile_project(project, copts)
 
@@ -211,6 +212,31 @@ def build_command(project: Project, opts: RenderOptions, workdir: Path) -> tuple
 _TIME_RE = re.compile(r"out_time_us=(\d+)")
 
 
+def _run_pass(args: list[str], duration: float, on_progress: Progress | None,
+              t0: float) -> tuple[int, list[str]]:
+    """Esegue ffmpeg riportando l'avanzamento. Ritorna (codice, righe di log)."""
+    proc = ffmpeg.popen(args)
+    log_lines: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        line = line.rstrip()
+        if not line:
+            continue
+        m = _TIME_RE.match(line)
+        if m and on_progress:
+            done = int(m.group(1)) / 1e6
+            on_progress({
+                "seconds": round(done, 3),
+                "duration": round(duration, 3),
+                "percent": round(min(100.0, done / duration * 100), 2) if duration else 0.0,
+                "elapsed": round(time.time() - t0, 2),
+            })
+        elif not line.startswith(("frame=", "fps=", "bitrate=", "total_size=", "out_time",
+                                  "dup_frames=", "drop_frames=", "speed=", "progress=", "stream_")):
+            log_lines.append(line)
+    return proc.wait(), log_lines
+
+
 def render(project: Project, opts: RenderOptions, on_progress: Progress | None = None) -> RenderResult:
     if not opts.output:
         raise ValueError("percorso di output mancante")
@@ -221,26 +247,23 @@ def render(project: Project, opts: RenderOptions, on_progress: Progress | None =
     t0 = time.time()
     try:
         args, duration, warnings, enc = build_command(project, opts, workdir)
-        proc = ffmpeg.popen(args)
-        log_lines: list[str] = []
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip()
-            if not line:
-                continue
-            m = _TIME_RE.match(line)
-            if m and on_progress:
-                done = int(m.group(1)) / 1e6
-                on_progress({
-                    "seconds": round(done, 3),
-                    "duration": round(duration, 3),
-                    "percent": round(min(100.0, done / duration * 100), 2) if duration else 0.0,
-                    "elapsed": round(time.time() - t0, 2),
-                })
-            elif not line.startswith(("frame=", "fps=", "bitrate=", "total_size=", "out_time",
-                                      "dup_frames=", "drop_frames=", "speed=", "progress=", "stream_")):
-                log_lines.append(line)
-        code = proc.wait()
+        code, log_lines = _run_pass(args, duration, on_progress, t0)
+
+        # L'accelerazione hardware e' un'ottimizzazione: non vale un render
+        # perso. La GPU puo' mancare al momento giusto — device che non nasce,
+        # sessioni dell'encoder gia' tutte occupate da altri processi, driver
+        # che cede sotto carico — e ffmpeg non se ne accorge con grazia: esce
+        # di schianto. Il ripiego rifa' *tutto* in software, decodifica e
+        # codifica insieme: ripetere con lo stesso encoder GPU quando e' la GPU
+        # a essere il problema significa fallire due volte.
+        if code != 0 and opts.prefer_hw and ("-hwaccel" in args or hw.detect().is_hw(enc)):
+            warnings = list(warnings) + [
+                "accelerazione hardware fallita: rifatto in software (piu' lento)"
+            ]
+            args, duration, _, enc = build_command(
+                project, replace(opts, prefer_hw=False), workdir)
+            code, log_lines = _run_pass(args, duration, on_progress, t0)
+
         if code != 0:
             raise ffmpeg.FFmpegError(args, code, "\n".join(log_lines[-40:]))
 

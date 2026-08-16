@@ -1,5 +1,18 @@
 // Unico punto di contatto con il backend.
 
+/**
+ * Altezza dei segmenti di anteprima riprodotti dal player.
+ *
+ * Deve stare sotto la soglia in cui il render va piu' lento della
+ * riproduzione, altrimenti il pezzo successivo non e' pronto in tempo e il
+ * filmato si ferma a ogni giunzione. Su un progetto pesante 540p rendeva a
+ * 0,6x il tempo reale e si impuntava; 432p sta sopra il tempo reale. Il
+ * fotogramma fermo resta a piena qualita' — questo vale solo per la
+ * riproduzione. Prefetch e richiesta devono usare lo stesso valore, altrimenti
+ * la chiave di cache cambia e il lavoro preparato si butta via.
+ */
+const PREVIEW_H = 432
+
 async function req(url, options) {
   const res = await fetch(url, options)
   if (!res.ok) {
@@ -49,13 +62,18 @@ export const api = {
     return req('/api/upload', { method: 'POST', body: form })
   },
 
-  prefetch: (start, duration, height = 540) =>
+  prefetch: (start, duration, height = PREVIEW_H) =>
     req(`/api/preview/prefetch?start=${start.toFixed(3)}&duration=${duration.toFixed(3)}&height=${height}`,
       { method: 'POST' }).catch(() => null),
 
-  frameUrl: (t, revision, width = 960) =>
-    `/api/frame?t=${t.toFixed(3)}&width=${width}&r=${revision}`,
-  previewUrl: (start, duration, revision, height = 540) =>
+  // prova = {effect, clip}: il fotogramma esce come se quell'effetto fosse
+  // applicato, ma il progetto non viene toccato
+  frameUrl: (t, revision, width = 960, prova = null) =>
+    `/api/frame?t=${t.toFixed(3)}&width=${width}&r=${revision}`
+    + (prova?.effect ? `&effect=${encodeURIComponent(prova.effect)}` : '')
+    + (prova?.preset ? `&preset=${encodeURIComponent(prova.preset)}` : '')
+    + ((prova?.effect || prova?.preset) && prova.clip ? `&clip=${prova.clip}` : ''),
+  previewUrl: (start, duration, revision, height = PREVIEW_H) =>
     `/api/preview?start=${start.toFixed(3)}&duration=${duration.toFixed(3)}&height=${height}&r=${revision}`,
 
   render: (body) =>

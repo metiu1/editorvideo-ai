@@ -8,6 +8,7 @@ esattamente le stesse operazioni e non possono divergere.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import mimetypes
@@ -37,7 +38,7 @@ from pydantic import BaseModel
 from . import chat as chat_mod
 from . import effects as fx
 from . import ffmpeg, hw, presets, proxy, render
-from .model import TRANSITIONS
+from .model import TRANSITIONS, Effect
 from .store import PRESETS, EditError, Store
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "dist"
@@ -323,6 +324,30 @@ def _temp_beside(out: Path) -> Path:
     return out.with_name(f"~{uuid.uuid4().hex[:8]}_{out.name}")
 
 
+# Fotogrammi al secondo dei segmenti di anteprima. Solo la codifica sta sulla
+# GPU: filtri, sovrapposizioni e scalatura sono su CPU, e il loro costo e' per
+# fotogramma prodotto. Su una timeline a 60 fps questo dimezza l'attesa.
+PREVIEW_FPS = 30.0
+
+# Quanti render di anteprima possono girare insieme. Non e' un limite di CPU:
+# oltre qualche ffmpeg in parallelo si litiga la memoria e il disco, e ognuno
+# diventa piu' lento di quanto si guadagni dal parallelismo.
+_preview_slots = threading.Semaphore(3)
+
+
+def _snapshot():
+    """Copia del progetto su cui rendere, presa sotto lock.
+
+    Il lock serve a non leggere il progetto mentre una modifica lo sta
+    cambiando: quella lettura dura la compilazione del filtergraph, 7 ms.
+    Tenerlo per tutta l'esecuzione di ffmpeg significava invece che un solo
+    prefetch da dodici secondi bloccava *ogni* fotogramma dello scrub finche'
+    non aveva finito. La copia costa quanto la compilazione e li disaccoppia.
+    """
+    with S.lock:
+        return copy.deepcopy(S.need().project)
+
+
 def _produce(out: Path, make) -> None:
     """Renderizza in un file temporaneo e lo sposta a destinazione solo a fine lavoro.
 
@@ -332,7 +357,7 @@ def _produce(out: Path, make) -> None:
     """
     tmp = _temp_beside(out)
     try:
-        with S.lock:
+        with _preview_slots:
             make(tmp)
         os.replace(tmp, out)
     except Exception:
@@ -340,20 +365,62 @@ def _produce(out: Path, make) -> None:
         raise
 
 
+def _aggiungi_prova(snap, effetti: list[Effect], clip_id: str | None) -> None:
+    """Mette gli effetti sulla *copia*.
+
+    Serve all'anteprima al passaggio del mouse: si vede come verrebbe senza che
+    il progetto cambi, quindi niente voce di undo e niente da annullare se poi
+    non lo si vuole.
+    """
+    if not clip_id:
+        snap.master.effects.extend(effetti)
+        return
+    for track in snap.tracks:
+        for c in track.clips:
+            if c.id == clip_id:
+                c.effects.extend(effetti)
+                return
+    raise HTTPException(404, f"clip sconosciuta: {clip_id}")
+
+
 @app.get("/api/frame")
-def frame(t: float = 0.0, width: int = 960):
-    """Fotogramma della timeline: e' l'anteprima usata durante lo scrub."""
+def frame(t: float = 0.0, width: int = 960,
+          effect: str | None = None, preset: str | None = None, clip: str | None = None):
+    """Fotogramma della timeline: e' l'anteprima usata durante lo scrub.
+
+    Con ``effect`` (un effetto) o ``preset`` (un look della libreria, che e' una
+    catena di effetti) il fotogramma esce come se fosse applicato, senza
+    applicarlo davvero.
+    """
     store = S.need()
     if store.project.duration() <= 0:
         raise HTTPException(400, "timeline vuota")
-    key = f"f_{S.revision()}_{t:.3f}_{width}"
+    if effect and effect not in fx.EFFECTS:
+        raise HTTPException(400, f"effetto sconosciuto: {effect}")
+
+    da_provare: list[Effect] = []
+    if effect:
+        da_provare.append(Effect(type=effect, params=fx.validate_effect(effect, {})))
+    if preset:
+        p = presets.find(preset)
+        if not p:
+            raise HTTPException(400, f"preset sconosciuto: {preset}")
+        for e in p.get("effects", []):
+            da_provare.append(Effect(type=e["type"],
+                                     params=fx.validate_effect(e["type"], e.get("params") or {})))
+
+    prova = f"_{effect or ''}_{preset or ''}_{clip or 'master'}" if da_provare else ""
+    key = f"f_{S.revision()}_{t:.3f}_{width}{prova}"
     out = _preview_dir() / f"{key}.jpg"
     if not _ready(out):
         with _key_lock(key):
             if not _ready(out):
+                snap = _snapshot()
+                if da_provare:
+                    _aggiungi_prova(snap, da_provare, clip)
                 try:
                     _produce(out, lambda tmp: render.render_frame(
-                        store.project, t, str(tmp), width, use_proxy=True))
+                        snap, t, str(tmp), width, use_proxy=True))
                 except Exception as exc:
                     raise HTTPException(500, f"anteprima fallita: {exc}") from exc
     return FileResponse(out, media_type="image/jpeg",
@@ -369,18 +436,26 @@ def _segment(start: float, duration: float, height: int) -> tuple[Path, float, f
     start = max(0.0, min(start, max(0.0, total - 0.05)))
     duration = max(0.2, min(duration, total - start))
 
-    key = f"p_{S.revision()}_{start:.3f}_{duration:.3f}_{height}"
+    # Il costo del segmento e' per fotogramma prodotto: su un progetto a 60 fps
+    # renderizzarne meta' dimezza l'attesa prima che parta la riproduzione. E'
+    # il compromesso normale di un monitor di lavorazione — il file finale esce
+    # sempre agli fps del progetto. Sta nella chiave perche' descrive il
+    # contenuto del file in cache.
+    fps = min(float(store.project.settings.fps or PREVIEW_FPS), PREVIEW_FPS)
+
+    key = f"p_{S.revision()}_{start:.3f}_{duration:.3f}_{height}_{fps:g}"
     out = _preview_dir() / f"{key}.mp4"
     if _ready(out):
         return out, start, duration
 
     w = int(store.project.settings.width * height / max(1, store.project.settings.height))
     w += w % 2
+    snap = _snapshot()
 
     def make(tmp: Path) -> None:
-        render.render(store.project, render.RenderOptions(
+        render.render(snap, render.RenderOptions(
             output=str(tmp), quality="draft", start=start, end=start + duration,
-            width=w, height=height, use_proxy=True, audio_bitrate="128k",
+            width=w, height=height, fps=fps, use_proxy=True, audio_bitrate="128k",
         ))
 
     with _key_lock(key):
@@ -436,16 +511,26 @@ class RenderBody(BaseModel):
     bitrate: str | None = None
     start: float | None = None
     end: float | None = None
+    # Formato di uscita diverso da quello del progetto: la stessa timeline esce
+    # 16:9, quadrata o verticale senza doverla rifare. Le clip si adattano al
+    # nuovo fotogramma secondo il proprio "fit" — cover riempie tagliando ai
+    # lati, contain lascia le bande.
+    width: int | None = None
+    height: int | None = None
 
 
 @app.post("/api/render")
 def render_start(body: RenderBody) -> dict:
-    store = S.need()
+    S.need()
     job_id = uuid.uuid4().hex[:8]
     S.jobs[job_id] = {"id": job_id, "state": "running", "percent": 0.0,
                       "output": body.output, "started": time.time()}
 
-    project = store.project
+    # Copia presa sotto lock, come per l'anteprima: un export dura minuti e le
+    # modifiche di Store avvengono sugli stessi oggetti Clip che il thread sta
+    # leggendo. Senza copia, continuare a montare mentre si esporta cambia il
+    # file che sta uscendo — o fa fallire la compilazione a meta'.
+    project = _snapshot()
 
     def work() -> None:
         def on_progress(p: dict) -> None:
@@ -457,6 +542,7 @@ def render_start(body: RenderBody) -> dict:
             opts = render.RenderOptions(
                 output=body.output, quality=body.quality, codec=body.codec,
                 bitrate=body.bitrate, start=body.start, end=body.end,
+                width=body.width, height=body.height,
             )
             res = render.render(project, opts, on_progress=on_progress)
             S.jobs[job_id].update(state="done", percent=100.0, output=res.output,

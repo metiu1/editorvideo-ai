@@ -170,6 +170,22 @@ def _f_lut(p: dict, c: Ctx) -> list[str]:
     return [f"lut3d=file='{esc_path(path)}':interp={val(p, 'interp', 'tetrahedral')}"]
 
 
+def _f_colormatch(p: dict, c: Ctx) -> list[str]:
+    """Guadagno e offset per canale: la correzione lineare del color transfer.
+
+    Si usa ``lutrgb`` con un'espressione invece di ``colorlevels`` perche'
+    quest'ultimo accetta punti di uscita solo tra 0 e 1: un guadagno sotto 1 o
+    un offset negativo non sarebbero rappresentabili.
+    """
+    args = []
+    for ch in "rgb":
+        gain = fnum(num(p, f"{ch}_gain", 1.0))
+        off = num(p, f"{ch}_off", 0.0) * 255.0
+        segno = "+" if off >= 0 else "-"
+        args.append(f"{ch}='clip(val*{gain}{segno}{fnum(abs(off))},0,255)'")
+    return ["lutrgb=" + ":".join(args)]
+
+
 def _f_blur(p: dict, c: Ctx) -> list[str]:
     return [f"gblur=sigma={fnum(num(p, 'sigma', 8) * c.scale)}:steps={int(num(p, 'steps', 1))}"]
 
@@ -242,6 +258,110 @@ def _f_pixelate(p: dict, c: Ctx) -> list[str]:
         f"scale=iw/{n}:ih/{n}:flags=neighbor",
         f"scale={c.width}:{c.height}:flags=neighbor",
     ]
+
+
+def parse_ranges(s: Any) -> list[tuple[float, float]]:
+    """``"1.2-1.8;4-4.5"`` -> [(1.2, 1.8), (4.0, 4.5)]. Ordinati e senza vuoti."""
+    out: list[tuple[float, float]] = []
+    for chunk in str(s or "").replace(",", ";").split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        a, _, b = chunk.partition("-")
+        try:
+            t0, t1 = float(a), float(b)
+        except ValueError:
+            continue
+        if t1 > t0:
+            out.append((t0, t1))
+    return sorted(out)
+
+
+def enable_expr(p: dict, c: Ctx) -> str:
+    """``:enable='...'`` per gli intervalli dichiarati, stringa vuota se sempre."""
+    r = parse_ranges(val(p, "ranges", ""))
+    if not r:
+        return ""
+    cond = "+".join(f"between({c.tvar},{fnum(a)},{fnum(b)})" for a, b in r)
+    return f":enable='{cond}'"
+
+
+def _px(expr: str, c: Ctx) -> str:
+    """Espressione in pixel di progetto -> pixel di render (preview ridotta)."""
+    return expr if abs(c.scale - 1.0) < 1e-6 else f"(({expr})*{fnum(c.scale)})"
+
+
+def _box(p: dict, c: Ctx) -> tuple[int, int, str, str]:
+    """Rettangolo della maschera, sempre dentro il fotogramma.
+
+    Il ritaglio non puo' eccedere il canvas (ffmpeg rifiuta un crop piu' grande
+    dell'ingresso) e nemmeno uscirne muovendosi: x/y sono animabili, quindi il
+    limite va messo nell'espressione, non nel valore.
+    """
+    w = max(2, min(int(num(p, "w", 300) * c.scale) // 2 * 2, c.width))
+    h = max(2, min(int(num(p, "h", 300) * c.scale) // 2 * 2, c.height))
+    x = f"min(max({_px(anim(p, 'x', 0, c), c)},0),{c.width - w})"
+    y = f"min(max({_px(anim(p, 'y', 0, c), c)},0),{c.height - h})"
+    return w, h, x, y
+
+
+def _f_mask_blur(p: dict, c: Ctx) -> list[str]:
+    """Sfoca solo un rettangolo: volto, targa, schermo, documento.
+
+    x/y sono animabili, quindi la maschera segue il soggetto con i keyframe.
+    """
+    w, h, x, y = _box(p, c)
+    sigma = fnum(max(0.1, num(p, "sigma", 20) * c.scale))
+    a, b, m = c.uid("mka"), c.uid("mkb"), c.uid("mkm")
+    return [
+        f"split[{a}][{b}];"
+        f"[{b}]crop=w={w}:h={h}:x='{x}':y='{y}',gblur=sigma={sigma}:steps=2[{m}];"
+        f"[{a}][{m}]overlay=x='{x}':y='{y}'{enable_expr(p, c)}"
+    ]
+
+
+def _f_mask_pixelate(p: dict, c: Ctx) -> list[str]:
+    """Come mask_blur ma a mosaico: censura riconoscibile come tale."""
+    w, h, x, y = _box(p, c)
+    n = max(2, int(num(p, "size", 16) * c.scale))
+    a, b, m = c.uid("mpa"), c.uid("mpb"), c.uid("mpm")
+    return [
+        f"split[{a}][{b}];"
+        f"[{b}]crop=w={w}:h={h}:x='{x}':y='{y}',"
+        f"scale=iw/{n}:ih/{n}:flags=neighbor,scale={w}:{h}:flags=neighbor[{m}];"
+        f"[{a}][{m}]overlay=x='{x}':y='{y}'{enable_expr(p, c)}"
+    ]
+
+
+def _f_mask_box(p: dict, c: Ctx) -> list[str]:
+    """Rettangolo pieno: la censura piu' netta, o una barra grafica."""
+    w, h, x, y = _box(p, c)
+    color = esc_str(str(val(p, "color", "black")))
+    alpha = fnum(max(0.0, min(1.0, num(p, "opacity", 1.0))))
+    return [
+        f"drawbox=x='{x}':y='{y}':w={w}:h={h}:color={color}@{alpha}:t=fill"
+        + enable_expr(p, c)
+    ]
+
+
+def _f_subtitles(p: dict, c: Ctx) -> list[str]:
+    """Imprime un file di sottotitoli (.ass, .srt, .vtt) nell'immagine.
+
+    Con .ass lo stile e il karaoke arrivano dal file; con .srt si puo' forzare
+    l'aspetto con ``force_style``. I tempi del file sono relativi alla clip.
+    """
+    path = str(val(p, "file", "")).strip()
+    if not path:
+        return []
+    args = [f"filename='{esc_path(path)}'"]
+    forza = str(val(p, "force_style", "")).strip()
+    if forza:
+        args.append(f"force_style='{esc_str(forza)}'")
+    if abs(c.scale - 1.0) > 1e-6:
+        # in preview il fotogramma e' piu' piccolo: senza questo i sottotitoli
+        # verrebbero disegnati alla dimensione del progetto e uscirebbero
+        args.append(f"original_size={int(c.width / c.scale)}x{int(c.height / c.scale)}")
+    return ["subtitles=" + ":".join(args)]
 
 
 def _f_mirror(p: dict, c: Ctx) -> list[str]:
@@ -337,6 +457,21 @@ def _a_gate(p: dict, c: Ctx) -> list[str]:
     ]
 
 
+def _a_censor(p: dict, c: Ctx) -> list[str]:
+    """Copre intervalli di parlato: muto o voce resa incomprensibile.
+
+    Gli intervalli arrivano da ``analyze.censor_spans``, che li ricava dai
+    timestamp per parola della trascrizione.
+    """
+    en = enable_expr(p, c)
+    if not en:
+        return []
+    if str(val(p, "mode", "mute")) == "scramble":
+        shift = fnum(num(p, "shift", 400))
+        return [f"afreqshift=shift={shift}{en}"]
+    return [f"volume=volume=0{en}"]
+
+
 def _a_dynnorm(p: dict, c: Ctx) -> list[str]:
     return [f"dynaudnorm=f={int(num(p, 'frame_ms', 200))}:g={int(num(p, 'gauss', 15))}:p={fnum(num(p, 'peak', 0.9))}"]
 
@@ -384,6 +519,14 @@ _DEFS: tuple[EffectDef, ...] = (
         _f_lut, "Applica una look-up table .cube.",
     ),
     EffectDef(
+        "colormatch", "video", "Uniforma colore",
+        tuple(Param(f"{ch}_{k}", 1.0 if k == "gain" else 0.0, min=-1, max=3)
+              for ch in ("r", "g", "b") for k in ("gain", "off")),
+        _f_colormatch,
+        "Guadagno e offset per canale. Non si impostano a mano: li calcola "
+        "match_color confrontando la clip con quella di riferimento.",
+    ),
+    EffectDef(
         "blur", "video", "Sfocatura",
         (Param("sigma", 8, min=0, max=100), Param("steps", 1, min=1, max=6)),
         _f_blur,
@@ -423,6 +566,49 @@ _DEFS: tuple[EffectDef, ...] = (
         _f_crop, "Ritaglia un rettangolo, il resto diventa trasparente.",
     ),
     EffectDef("pixelate", "video", "Pixel", (Param("size", 16, min=2, max=200),), _f_pixelate),
+    EffectDef(
+        "mask_blur", "video", "Maschera sfocata",
+        (
+            Param("x", 0, anim=True, desc="px, angolo in alto a sinistra"),
+            Param("y", 0, anim=True),
+            Param("w", 300, min=2), Param("h", 300, min=2),
+            Param("sigma", 20, min=1, max=100),
+            Param("ranges", "", kind="string", desc="'1.2-1.8;4-4.5' = solo in quegli istanti"),
+        ),
+        _f_mask_blur,
+        "Sfoca solo un rettangolo (volto, targa, schermo). x/y animabili: con i "
+        "keyframe la maschera segue il soggetto. ranges vuoto = sempre attiva.",
+    ),
+    EffectDef(
+        "mask_pixelate", "video", "Maschera a mosaico",
+        (
+            Param("x", 0, anim=True), Param("y", 0, anim=True),
+            Param("w", 300, min=2), Param("h", 300, min=2),
+            Param("size", 16, min=2, max=200),
+            Param("ranges", "", kind="string"),
+        ),
+        _f_mask_pixelate, "Come mask_blur ma a mosaico: censura evidente.",
+    ),
+    EffectDef(
+        "mask_box", "video", "Barra piena",
+        (
+            Param("x", 0, anim=True), Param("y", 0, anim=True),
+            Param("w", 300, min=2), Param("h", 120, min=2),
+            Param("color", "black", kind="color"),
+            Param("opacity", 1.0, min=0, max=1),
+            Param("ranges", "", kind="string"),
+        ),
+        _f_mask_box, "Rettangolo pieno: censura netta o barra grafica.",
+    ),
+    EffectDef(
+        "subtitles", "video", "Sottotitoli",
+        (Param("file", "", kind="file", desc="file .ass (karaoke) o .srt"),
+         Param("force_style", "", kind="string",
+               desc="solo per .srt, es. 'Fontsize=48,Bold=1'")),
+        _f_subtitles,
+        "Imprime i sottotitoli nell'immagine. Generali con make_captions: il "
+        "formato .ass porta anche l'evidenziazione parola per parola.",
+    ),
     EffectDef(
         "mirror", "video", "Specchia",
         (Param("horizontal", True, kind="bool"), Param("vertical", False, kind="bool")),
@@ -470,6 +656,18 @@ _DEFS: tuple[EffectDef, ...] = (
         (Param("threshold", 0.02, min=0, max=1), Param("ratio", 4, min=1, max=20),
          Param("attack", 20), Param("release", 250)),
         _a_gate,
+    ),
+    EffectDef(
+        "censor", "audio", "Censura parlato",
+        (
+            Param("ranges", "", kind="string", desc="'12.4-12.9;30.1-30.4' dalla trascrizione"),
+            Param("mode", "mute", kind="enum", choices=("mute", "scramble")),
+            Param("shift", 400, min=50, max=2000, desc="Hz, solo per scramble"),
+        ),
+        _a_censor,
+        "Copre gli intervalli indicati: mute li azzera, scramble sposta le "
+        "frequenze e rende la voce incomprensibile ma presente. Gli intervalli "
+        "arrivano da analyze.censor_spans (timestamp per parola).",
     ),
     EffectDef(
         "dynnorm", "audio", "Normalizzazione dinamica",

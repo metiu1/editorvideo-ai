@@ -3,6 +3,7 @@ funzioni python: e' cosi' che lo usera' l'agente.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -129,3 +130,21 @@ async def test_preview_frame_restituisce_immagine(assets, tmp_path):
                                                  "path": str(tmp_path / "f.jpg")})
     assert not r.is_error
     assert "image" in [getattr(c, "type", None) for c in r.content]
+
+
+@pytest.mark.anyio
+async def test_project_open_rilegge_da_disco(assets, tmp_path):
+    """Il file puo' cambiare fuori (UI, altro processo): open deve rileggerlo."""
+    p = str(tmp_path / "p.json")
+    await call("project_create", path=p)
+    m = (await call("import_media", paths=[assets["red"]]))[0]
+    await call("add_clip", media=m["id"])
+    assert len(_tracks(await call("project_info"))) == 1
+
+    # modifica dall'esterno, come farebbe la UI su un altro processo
+    doc = json.loads(Path(p).read_text(encoding="utf-8"))
+    doc["tracks"][0]["clips"] = []
+    Path(p).write_text(json.dumps(doc), encoding="utf-8")
+
+    await call("project_open", path=p)
+    assert _tracks(await call("project_info")) == []

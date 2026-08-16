@@ -1,22 +1,24 @@
 import React, { useState } from 'react'
+import Icon from './Icons.jsx'
 import { Anim, Check, EffectParams, Num, Row, Select, Text } from './Params.jsx'
 
 /** Pannello proprieta': clip selezionata, oppure progetto e master. */
 export default function Inspector({
-  project, effects, transitions, clip, playhead, run, setError, setBusy,
+  project, effects, transitions, clip, playhead, run, setError, setBusy, onProva,
 }) {
   const call = (op, args) => run(op, args).catch((e) => setError(e.message))
   return (
     <div className="inspector">
       {clip
         ? <ClipPanel clip={clip} effects={effects} transitions={transitions}
-            project={project} playhead={playhead} call={call} />
-        : <ProjectPanel project={project} effects={effects} call={call} setBusy={setBusy} setError={setError} />}
+            project={project} playhead={playhead} call={call} onProva={onProva} />
+        : <ProjectPanel project={project} effects={effects} call={call} setBusy={setBusy}
+            setError={setError} onProva={onProva} />}
     </div>
   )
 }
 
-function ClipPanel({ clip, effects, transitions, project, playhead, call }) {
+function ClipPanel({ clip, effects, transitions, project, playhead, call, onProva }) {
   const clipTime = Math.max(0, playhead - clip.start)
   const set = (patch) => call('set_clip', { clip_id: clip.id, ...patch })
   const tr = clip.transform || {}
@@ -76,10 +78,17 @@ function ClipPanel({ clip, effects, transitions, project, playhead, call }) {
       <TransitionPanel clip={clip} transitions={transitions} project={project} call={call} />
 
       <div className="group">
-        <h4>posizione e scala</h4>
+        <h4>
+          posizione e scala
+          <button className="icon sm azzera" title="Rimetti tutti i valori di partenza"
+            onClick={() => call('set_transform',
+              { clip_id: clip.id, x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 })}>
+            <Icon name="annulla" size={12} />
+          </button>
+        </h4>
         {['x', 'y', 'scale', 'rotation', 'opacity'].map((k) => (
           <Anim key={k} label={k} value={tr[k] ?? (k === 'scale' || k === 'opacity' ? 1 : 0)}
-            clipTime={clipTime} animatable
+            clipTime={clipTime} animatable def={k === 'scale' || k === 'opacity' ? 1 : 0}
             min={k === 'opacity' ? 0 : undefined} max={k === 'opacity' ? 1 : undefined}
             step={k === 'x' || k === 'y' || k === 'rotation' ? 1 : 0.05}
             onChange={(v) => call('set_transform', { clip_id: clip.id, [k]: v })} />
@@ -90,9 +99,16 @@ function ClipPanel({ clip, effects, transitions, project, playhead, call }) {
       {clip.type === 'text' && <TextPanel clip={clip} call={call} />}
 
       <div className="group">
-        <h4>audio</h4>
+        <h4>
+          audio
+          <button className="icon sm azzera" title="Rimetti tutti i valori di partenza"
+            onClick={() => call('set_audio',
+              { clip_id: clip.id, gain_db: 0, mute: false, pan: 0, fade_in: 0, fade_out: 0 })}>
+            <Icon name="annulla" size={12} />
+          </button>
+        </h4>
         <Anim label="volume dB" value={au.gain_db ?? 0} clipTime={clipTime} animatable
-          min={-60} max={24} step={0.5}
+          def={0} min={-60} max={24} step={0.5}
           onChange={(v) => call('set_audio', { clip_id: clip.id, gain_db: v })} />
         <Row label="muto"><Check value={!!au.mute}
           onChange={(v) => call('set_audio', { clip_id: clip.id, mute: v })} /></Row>
@@ -105,7 +121,7 @@ function ClipPanel({ clip, effects, transitions, project, playhead, call }) {
       </div>
 
       <Effects target={clip.id} list={clip.effects || []} effects={effects}
-        clipTime={clipTime} call={call} />
+        clipTime={clipTime} call={call} onProva={onProva} />
     </>
   )
 }
@@ -195,10 +211,37 @@ function TextPanel({ clip, call }) {
   )
 }
 
-function Effects({ target, list, effects, clipTime, call }) {
-  const [toAdd, setToAdd] = useState('')
+function Effects({ target, list, effects, clipTime, call, onProva }) {
   const byName = Object.fromEntries(effects.map((e) => [e.name, e]))
   const args = (extra) => (target ? { clip_id: target, ...extra } : { clip_id: null, ...extra })
+
+  /**
+   * Il catalogo: un riquadro per effetto, con l'icona.
+   *
+   * Col mouse sopra, il monitor mostra come verrebbe senza applicarlo — il
+   * fotogramma lo rende il server su una copia del progetto, quindi non c'e'
+   * niente da annullare se poi non lo si vuole. Gli effetti audio non cambiano
+   * un fotogramma fermo: per quelli non si prova niente e si dice perche'.
+   */
+  const Catalogo = ({ kind }) => (
+    <div className="fxgrid">
+      {effects.filter((e) => e.kind === kind).map((e) => (
+        <button
+          key={e.name} className="fxcard"
+          title={`${e.label}${e.desc ? ` — ${e.desc}` : ''}`
+            + (kind === 'video' ? '\nPassa sopra per vedere l\'anteprima.' : '')}
+          onMouseEnter={() => kind === 'video' && onProva?.({ effect: e.name, label: e.label })}
+          onMouseLeave={() => kind === 'video' && onProva?.(null)}
+          onFocus={() => kind === 'video' && onProva?.({ effect: e.name, label: e.label })}
+          onBlur={() => kind === 'video' && onProva?.(null)}
+          onClick={() => { onProva?.(null); call('add_effect', args({ effect: e.name })) }}
+        >
+          <Icon name={e.name} size={20} />
+          <span>{e.label}</span>
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div className="group">
@@ -209,12 +252,14 @@ function Effects({ target, list, effects, clipTime, call }) {
         return (
           <div className="effect" key={e.i}>
             <header>
-              <Check value={e.enabled !== false}
+              <Check value={e.enabled !== false} title="Attiva o disattiva l'effetto"
                 onChange={(v) => call('update_effect', args({ index: e.i, enabled: v }))} />
               <b>{spec.label}</b>
               <span className="spacer" />
-              <button className="kf-btn"
-                onClick={() => call('remove_effect', args({ index: e.i }))}>✕</button>
+              <button className="icon sm danger" title="Rimuovi l'effetto"
+                onClick={() => call('remove_effect', args({ index: e.i }))}>
+                <Icon name="chiudi" size={13} />
+              </button>
             </header>
             <EffectParams spec={spec} params={e.params} clipTime={clipTime}
               onChange={(patch) => call('update_effect', args({ index: e.i, params: patch }))} />
@@ -222,27 +267,16 @@ function Effects({ target, list, effects, clipTime, call }) {
           </div>
         )
       })}
-      <div className="row" style={{ gridTemplateColumns: '1fr auto' }}>
-        <select value={toAdd} onChange={(e) => setToAdd(e.target.value)}>
-          <option value="">aggiungi effetto…</option>
-          <optgroup label="video">
-            {effects.filter((e) => e.kind === 'video').map((e) =>
-              <option key={e.name} value={e.name}>{e.label}</option>)}
-          </optgroup>
-          <optgroup label="audio">
-            {effects.filter((e) => e.kind === 'audio').map((e) =>
-              <option key={e.name} value={e.name}>{e.label}</option>)}
-          </optgroup>
-        </select>
-        <button disabled={!toAdd} onClick={() => {
-          call('add_effect', args({ effect: toAdd })); setToAdd('')
-        }}>+</button>
-      </div>
+      <h4 className="fxtitolo">aggiungi effetto</h4>
+      <div className="hint fxnota">video — passa sopra per vedere l'anteprima</div>
+      <Catalogo kind="video" />
+      <div className="hint fxnota">audio</div>
+      <Catalogo kind="audio" />
     </div>
   )
 }
 
-function ProjectPanel({ project, effects, call, setBusy, setError }) {
+function ProjectPanel({ project, effects, call, setBusy, setError, onProva }) {
   const s = project?.settings
   const ln = project?.master?.loudnorm || {}
   const [lufs, setLufs] = useState(ln.target_lufs ?? -14)
@@ -283,7 +317,7 @@ function ProjectPanel({ project, effects, call, setBusy, setError }) {
       </div>
 
       <Effects target={null} list={project.master.effects.map((e, i) => ({ ...e, i }))}
-        effects={effects} clipTime={0} call={call} />
+        effects={effects} clipTime={0} call={call} onProva={onProva} />
     </>
   )
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, chat as sendChat } from './api.js'
+import Icon from './Icons.jsx'
 
 const TOOL_LABEL = {
   project_info: 'guarda la timeline', import_media: 'importa file', add_clip: 'aggiunge una clip',
@@ -95,17 +96,20 @@ export default function Chat({ available, onProject, setError }) {
       <div className="section-title">
         assistente
         <span className="spacer" />
-        <button className="kf-btn" onClick={reset} title="ricomincia la conversazione">azzera</button>
+        <button className="icon sm" onClick={reset} title="Ricomincia la conversazione">
+          <Icon name="cestino" size={14} />
+        </button>
       </div>
 
       <div className="chatlog">
         {!turns.length && (
-          <div className="hint" style={{ padding: 12 }}>
-            Chiedi in italiano. Per esempio:<br />
-            <i>«togli i primi 2 secondi della prima clip»</i><br />
-            <i>«metti una dissolvenza tra le due riprese»</i><br />
-            <i>«rendi il video piu' cinematografico»</i><br /><br />
-            Modifica il progetto davvero: quello che fa lo annulli con Ctrl+Z.
+          <div className="chatempty">
+            Chiedi una modifica in italiano:<br />
+            <em>«togli i primi 2 secondi della prima clip»</em><br />
+            <em>«metti una dissolvenza tra le due riprese»</em><br />
+            <em>«rendi il video più cinematografico»</em><br />
+            <em>«sposta la musica su una traccia sua»</em><br /><br />
+            Modifica il progetto davvero. Quello che fa lo annulli con Ctrl+Z.
           </div>
         )}
         {turns.map((m, i) => (
@@ -114,12 +118,15 @@ export default function Chat({ available, onProject, setError }) {
               <>
                 {m.tools?.map((t, j) => (
                   <div key={j} className={`toolrow ${t.state}`}>
-                    {t.state === 'run' ? '◐' : t.state === 'ok' ? '✓' : '✕'}{' '}
+                    <Icon size={13} className={t.state === 'run' ? 'spin' : ''}
+                      name={t.state === 'run' ? 'attesa' : t.state === 'ok' ? 'spunta' : 'chiudi'} />
                     {TOOL_LABEL[t.name] || t.name}
                     {t.message && <span className="hint"> — {t.message}</span>}
                   </div>
                 ))}
-                {m.thinking && !m.text && <div className="hint">sto ragionando…</div>}
+                {m.thinking && !m.text && (
+                  <div className="toolrow"><Icon size={13} name="attesa" className="spin" />sto ragionando…</div>
+                )}
                 {m.text}
                 {m.error && <div className="chaterr">{m.error}</div>}
               </>
@@ -138,7 +145,8 @@ export default function Chat({ available, onProject, setError }) {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
           }}
         />
-        <button className="primary" disabled={busy || !input.trim()} onClick={send}>invia</button>
+        <button className="primary icon" disabled={busy || !input.trim()} onClick={send}
+          title="Invia (Invio)"><Icon name="invia" /></button>
       </div>
     </div>
   )

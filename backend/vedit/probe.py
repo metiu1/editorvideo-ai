@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from . import ffmpeg
@@ -50,7 +51,15 @@ def probe(path: str, media_id: str | None = None) -> Media:
     streams = data.get("streams", [])
     fmt = data.get("format", {})
 
-    v = next((s for s in streams if s.get("codec_type") == "video"), None)
+    # La copertina di un mp3 e' uno stream video a tutti gli effetti: presa per
+    # buona, il brano diventa un "video" 360x360 senza fotogrammi, finisce su
+    # una traccia video e la striscia in timeline resta vuota. ffprobe la marca
+    # con attached_pic, ed e' l'unico modo per distinguerla.
+    def copertina(s: dict) -> bool:
+        return bool(s.get("disposition", {}).get("attached_pic"))
+
+    v = next((s for s in streams
+              if s.get("codec_type") == "video" and not copertina(s)), None)
     a = next((s for s in streams if s.get("codec_type") == "audio"), None)
 
     kind = kind_from_ext(str(p))
@@ -100,6 +109,53 @@ def probe(path: str, media_id: str | None = None) -> Media:
         channels=int((a or {}).get("channels") or 0),
         name=p.name,
     )
+
+
+def recorded_at(path: str) -> dict:
+    """Quando e' stato girato, e con cosa.
+
+    L'ordine cronologico di una cartella non si deduce dai nomi dei file:
+    ``IMG_9987`` puo' essere di ieri e ``IMG_0001`` di stamattina. I tag del
+    contenitore lo dicono; quando mancano resta la data del file, che e' una
+    approssimazione onesta purche' dichiarata (``fonte``).
+    """
+    data = probe_raw(path)
+    fmt_tags = {k.lower(): v for k, v in (data.get("format", {}).get("tags") or {}).items()}
+    stream_tags: dict = {}
+    for s in data.get("streams", []):
+        for k, v in (s.get("tags") or {}).items():
+            stream_tags.setdefault(k.lower(), v)
+
+    quando = fonte = None
+    for chiave in ("creation_time", "date", "com.apple.quicktime.creationdate",
+                   "date_eng", "originaldatetime"):
+        val = fmt_tags.get(chiave) or stream_tags.get(chiave)
+        if val:
+            quando, fonte = str(val), f"tag:{chiave}"
+            break
+    if quando is None:
+        try:
+            quando = datetime.fromtimestamp(Path(path).stat().st_mtime).isoformat(
+                timespec="seconds")
+            fonte = "file:mtime"
+        except OSError:
+            fonte = "sconosciuta"
+
+    return {
+        "quando": quando,
+        "fonte": fonte,
+        "camera": fmt_tags.get("make") or stream_tags.get("make"),
+        "modello": fmt_tags.get("model") or stream_tags.get("model"),
+        "timecode": fmt_tags.get("timecode") or stream_tags.get("timecode"),
+    }
+
+
+def sort_key(path: str) -> tuple:
+    """Chiave di ordinamento cronologico, con il nome come spareggio."""
+    info = recorded_at(path)
+    quando = info.get("quando") or ""
+    # le date ISO si ordinano bene da stringhe; la Z finale non disturba
+    return (quando or "9999", Path(path).name.lower())
 
 
 def loudness(path: str, start: float = 0.0, duration: float | None = None) -> dict:

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, connectEvents } from './api.js'
 import Chat from './Chat.jsx'
-import { FileBrowser, NewProject, RenderDialog } from './Dialogs.jsx'
+import { Confirm, FileBrowser, NewProject, RenderDialog } from './Dialogs.jsx'
+import Icon from './Icons.jsx'
 import Inspector from './Inspector.jsx'
 import Library from './Library.jsx'
 import MediaBin from './MediaBin.jsx'
@@ -12,9 +13,19 @@ import { clamp, findClip, fmt } from './util.js'
 
 const MEDIA_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|mpe?g|wmv|flv|ts|mp3|wav|aac|m4a|flac|ogg|opus|png|jpe?g|webp|bmp|tiff?)$/i
 
-// le misure dei pannelli restano tra una sessione e l'altra
+// Le misure dei pannelli restano tra una sessione e l'altra. Vengono rilette
+// entro i limiti di adesso: una misura salvata da una versione precedente puo'
+// essere fuori scala e mandare i comandi fuori dalla loro riga.
+const LIMITS = { bin: [170, 520], inspector: [240, 600], timeline: [120, 1400], trackH: [44, 140] }
+
 const loadSizes = () => {
-  try { return JSON.parse(localStorage.getItem('vedit.layout')) || {} } catch { return {} }
+  let saved = {}
+  try { saved = JSON.parse(localStorage.getItem('vedit.layout')) || {} } catch { saved = {} }
+  for (const [k, [lo, hi]] of Object.entries(LIMITS)) {
+    if (typeof saved[k] === 'number') saved[k] = Math.max(lo, Math.min(hi, saved[k]))
+    else delete saved[k]
+  }
+  return saved
 }
 
 export default function App() {
@@ -23,6 +34,13 @@ export default function App() {
   const [path, setPath] = useState(null)
   const [revision, setRevision] = useState('0')
   const [selected, setSelected] = useState(null)
+  // effetto sotto il mouse nel catalogo: il monitor lo mostra applicato senza
+  // che il progetto cambi, cosi' si sceglie guardando invece di provare e annullare
+  const [provaFx, setProvaFx] = useState(null)
+  // diretta: compone il browser, si parte subito ma alcuni effetti non si
+  // vedono. fedele: lo renderizza ffmpeg, esatto ma si aspetta.
+  const [diretta, setDiretta] = useState(
+    () => localStorage.getItem('vedit.diretta') !== 'no')
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [pxPerSec, setPxPerSec] = useState(70)
@@ -36,6 +54,7 @@ export default function App() {
   const [rightTab, setRightTab] = useState('props')    // props | chat
   const [uploading, setUploading] = useState(null)
   const [dropping, setDropping] = useState(false)
+  const [confirm, setConfirm] = useState(null)   // {title, message, ok, danger, onOk}
   const [sizes, setSizes] = useState(() => ({
     bin: 250, inspector: 320, timeline: 300, trackH: 72, ...loadSizes(),
   }))
@@ -69,6 +88,11 @@ export default function App() {
     const t = setTimeout(() => setError(null), 6000)
     return () => clearTimeout(t)
   }, [error])
+
+  // Conferma per le azioni che distruggono lavoro. Sostituisce confirm() del
+  // browser: quello blocca tutta la pagina, non si puo' vestire e su Windows
+  // compare come una finestra di sistema in mezzo a un editor scuro.
+  const ask = useCallback((opts) => setConfirm(opts), [])
 
   // avviso che sparisce da solo (le operazioni lunghe usano setBusy direttamente)
   const flash = useCallback((msg, ms = 2500) => {
@@ -194,29 +218,41 @@ export default function App() {
       }}
     >
       <div className="topbar">
-        <span className="name">vedit</span>
-        <button onClick={() => setDialog('new')}>nuovo</button>
-        <button onClick={() => setDialog('open')}>apri</button>
-        <button disabled={!project} onClick={() => run('save', {})
-          .then(() => flash('progetto salvato')).catch((e) => setError(e.message))}>salva</button>
-        <span style={{ width: 10 }} />
-        <button disabled={!project} title="Ctrl+Z"
-          onClick={() => run('undo').catch((e) => setError(e.message))}>↶</button>
-        <button disabled={!project} title="Ctrl+Y"
-          onClick={() => run('redo').catch((e) => setError(e.message))}>↷</button>
-        <span style={{ width: 10 }} />
-        <button disabled={!project} onClick={() => run('add_track', { kind: 'video' })}>+ video</button>
-        <button disabled={!project} onClick={() => run('add_track', { kind: 'audio' })}>+ audio</button>
-        <button disabled={!project} onClick={() =>
-          run('add_text', { text: 'Testo', start: playhead, duration: 3 })
-            .then((c) => setSelected(c.id)).catch((e) => setError(e.message))}>+ testo</button>
+        <span className="name">VEDIT</span>
+        <button className="ghost" onClick={() => setDialog('new')}>
+          <Icon name="nuovo" />nuovo</button>
+        <button className="ghost" onClick={() => setDialog('open')}>
+          <Icon name="apri" />apri</button>
+        <button className="ghost" disabled={!project} onClick={() => run('save', {})
+          .then(() => flash('progetto salvato')).catch((e) => setError(e.message))}>
+          <Icon name="salva" />salva</button>
+
+        <span className="sep" />
+        <button className="icon" disabled={!project} title="Annulla (Ctrl+Z)"
+          onClick={() => run('undo').catch((e) => setError(e.message))}><Icon name="annulla" /></button>
+        <button className="icon" disabled={!project} title="Ripeti (Ctrl+Y)"
+          onClick={() => run('redo').catch((e) => setError(e.message))}><Icon name="ripeti" /></button>
+
+        <span className="sep" />
+        <button className="ghost" disabled={!project} title="Nuova traccia video"
+          onClick={() => run('add_track', { kind: 'video' }).catch((e) => setError(e.message))}>
+          <Icon name="video" />traccia</button>
+        <button className="ghost" disabled={!project} title="Nuova traccia audio"
+          onClick={() => run('add_track', { kind: 'audio' }).catch((e) => setError(e.message))}>
+          <Icon name="audio" />traccia</button>
+        <button className="ghost" disabled={!project} title="Titolo alla testina"
+          onClick={() => run('add_text', { text: 'Testo', start: playhead, duration: 3 })
+            .then((c) => setSelected(c.id)).catch((e) => setError(e.message))}>
+          <Icon name="testo" />titolo</button>
+
         <span className="spacer" />
-        <span className="path">{path || 'nessun progetto'}</span>
-        <button disabled={!project} onClick={() => { setBusy('genero i proxy…'); api.buildProxies() }}>
-          proxy
-        </button>
+        <span className="path" title={path || ''}>{path || 'nessun progetto'}</span>
+        <button className="ghost" disabled={!project}
+          title="Genera copie a bassa risoluzione: anteprime molto piu' rapide"
+          onClick={() => { setBusy('genero i proxy…'); api.buildProxies() }}>
+          <Icon name="proxy" />proxy</button>
         <button className="primary" disabled={!project || !project.duration}
-          onClick={() => setDialog('render')}>esporta</button>
+          onClick={() => setDialog('render')}><Icon name="esporta" />esporta</button>
       </div>
 
       <div className="middle">
@@ -224,16 +260,17 @@ export default function App() {
           <div className="panel">
             <div className="tabs">
               <button className={leftTab === 'media' ? 'on' : ''}
-                onClick={() => setLeftTab('media')}>media</button>
+                onClick={() => setLeftTab('media')}><Icon name="video" />media</button>
               <button className={leftTab === 'libreria' ? 'on' : ''}
-                onClick={() => setLeftTab('libreria')}>libreria</button>
+                onClick={() => setLeftTab('libreria')}><Icon name="libreria" />libreria</button>
             </div>
             {leftTab === 'media' ? (
               <MediaBin project={project} run={run} setError={setError} uploading={uploading}
-                onImport={importFiles}
+                onImport={importFiles} ask={ask}
                 onOpenSource={(m) => { setSource(m); setTab('source') }} />
             ) : (
               <Library library={sys?.library} clip={selectedClip} setError={setError}
+                onProva={setProvaFx}
                 onPreset={applyPreset}
                 onTransition={(type, dur) => applyTransition(type, dur)} />
             )}
@@ -251,9 +288,6 @@ export default function App() {
               sorgente{source ? `: ${source.name}` : ''}
             </button>
             <span className="spacer" />
-            {selectedClip && !playing && tab === 'program' && (
-              <span className="hint">trascina l'immagine per spostare la clip selezionata</span>
-            )}
           </div>
 
           {tab === 'source' && source ? (
@@ -263,33 +297,58 @@ export default function App() {
           ) : (
             <Preview project={project} revision={revision} playhead={playhead} seek={seek}
               playing={playing} setPlaying={setPlaying} clip={selectedClip}
-              run={run} setError={setError} />
+              run={run} setError={setError}
+              prova={provaFx ? { ...provaFx, clip: selected } : null}
+              diretta={diretta} />
           )}
 
           <div className="transport">
-            <button onClick={() => setPlaying((p) => !p)} disabled={!project?.duration}>
-              {playing ? '⏸' : '▶'}
+            <button className="icon" title="Torna all'inizio (Home)"
+              onClick={() => seek(0)} disabled={!project}><Icon name="inizio" /></button>
+            <button className="icon" title={playing ? 'Pausa (spazio)' : 'Riproduci (spazio)'}
+              onClick={() => setPlaying((p) => !p)} disabled={!project?.duration}>
+              <Icon name={playing ? 'pausa' : 'play'} size={17} />
             </button>
-            <button onClick={() => seek(0)} disabled={!project}>⏮</button>
             <span className="time">
               <b>{fmt(playhead)}</b> / {fmt(project?.duration || 0)}
             </span>
+
+            <button
+              className={`modo ${diretta ? 'on' : ''}`}
+              title={diretta
+                ? 'Diretta: compone il browser, nessuna attesa. Alcuni effetti non si vedono.'
+                : 'Fedele: lo renderizza ffmpeg, identico al file finale, ma va preparato.'}
+              onClick={() => setDiretta((d) => {
+                localStorage.setItem('vedit.diretta', d ? 'no' : 'si')
+                return !d
+              })}>
+              {diretta ? 'diretta' : 'fedele'}
+            </button>
+
+            <span className="sep" />
+            <button className="icon" disabled={!selectedClip} title="Taglia alla testina (S)"
+              onClick={() => run('split_clip', { clip_id: selected, at: playhead })
+                .catch((e) => setError(e.message))}><Icon name="taglia" /></button>
+            <button className="icon danger" disabled={!selectedClip} title="Elimina la clip (Canc)"
+              onClick={() => run('remove_clip', { clip_id: selected })
+                .then(() => setSelected(null)).catch((e) => setError(e.message))}>
+              <Icon name="cestino" /></button>
+
             <span className="spacer" />
-            {selectedClip && (
-              <>
-                <button onClick={() => run('split_clip', { clip_id: selected, at: playhead })
-                  .catch((e) => setError(e.message))} title="taglia alla testina (S)">✂ taglia</button>
-                <button onClick={() => run('remove_clip', { clip_id: selected })
-                  .then(() => setSelected(null)).catch((e) => setError(e.message))}>elimina</button>
-              </>
-            )}
-            <span className="hint">zoom</span>
-            <input type="range" min="8" max="400" value={pxPerSec} style={{ width: 130 }}
-              onChange={(e) => setPxPerSec(+e.target.value)} />
-            <span className="hint">tracce</span>
-            <input type="range" min="34" max="140" step="2" value={sizes.trackH}
-              style={{ width: 90 }} title="altezza delle tracce: abbassala per vederne di piu'"
-              onChange={(e) => setSizes((s) => ({ ...s, trackH: +e.target.value }))} />
+            <span className="ctl">
+              <span>zoom</span>
+              <input type="range" min="8" max="400" value={pxPerSec} style={{ width: 120 }}
+                title="Scala dei tempi in timeline"
+                onChange={(e) => setPxPerSec(+e.target.value)} />
+            </span>
+            <span className="ctl">
+              <span>tracce</span>
+              {/* il minimo e' l'altezza sotto la quale i comandi della testata
+                  non ci starebbero piu': due righe da 18px, spazi e margini */}
+              <input type="range" min="44" max="140" step="2" value={sizes.trackH}
+                style={{ width: 84 }} title="Altezza delle tracce: abbassala per vederne di piu'"
+                onChange={(e) => setSizes((s) => ({ ...s, trackH: +e.target.value }))} />
+            </span>
           </div>
 
           <Divider horizontal
@@ -297,7 +356,8 @@ export default function App() {
           <div style={{ height: sizes.timeline, flex: 'none', display: 'flex', minHeight: 0 }}>
             <Timeline project={project} playhead={playhead} seek={seek} pxPerSec={pxPerSec}
               selected={selected} setSelected={setSelected} run={run} setError={setError}
-              onPreset={applyPreset} onTransition={applyTransition} trackH={sizes.trackH} />
+              onPreset={applyPreset} onTransition={applyTransition} trackH={sizes.trackH}
+              ask={ask} />
           </div>
         </div>
 
@@ -306,14 +366,15 @@ export default function App() {
           <div className="panel">
             <div className="tabs">
               <button className={rightTab === 'props' ? 'on' : ''}
-                onClick={() => setRightTab('props')}>proprieta'</button>
+                onClick={() => setRightTab('props')}><Icon name="proprieta" />proprieta'</button>
               <button className={rightTab === 'chat' ? 'on' : ''}
-                onClick={() => setRightTab('chat')}>assistente</button>
+                onClick={() => setRightTab('chat')}><Icon name="assistente" />assistente</button>
             </div>
             {rightTab === 'props' ? (
               <Inspector project={project} effects={sys?.effects || []}
                 transitions={sys?.transitions || []} clip={selectedClip}
-                playhead={playhead} run={run} setError={setError} setBusy={setBusy} />
+                playhead={playhead} run={run} setError={setError} setBusy={setBusy}
+                onProva={setProvaFx} />
             ) : (
               <Chat available={sys?.chat} setError={setError}
                 onProject={(p, r) => { setProject(p); setRevision(r) }} />
@@ -344,9 +405,22 @@ export default function App() {
           onClose={() => setDialog(null)} />
       )}
 
+      {confirm && (
+        <Confirm {...confirm} onClose={() => setConfirm(null)} />
+      )}
+
       {dropping && <div className="dropzone">rilascia qui i file da importare</div>}
-      {busy && <div className="toast ok">{busy}</div>}
-      {error && <div className="toast" onClick={() => setError(null)}>{error}</div>}
+      {busy && (
+        <div className="toast ok"><Icon name="attesa" className="spin" />{busy}</div>
+      )}
+      {error && (
+        <div className="toast">
+          <span>{error}</span>
+          <button className="icon sm" title="Chiudi" onClick={() => setError(null)}>
+            <Icon name="chiudi" size={13} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
