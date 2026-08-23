@@ -61,6 +61,10 @@ class Store:
         self._undo: list[dict] = []
         self._redo: list[dict] = []
         self._batch = 0
+        # chiamata dopo ogni modifica conclusa. La usa l'interfaccia web per
+        # aggiornarsi quando a montare e' l'agente: stesso Store, un solo
+        # scrittore, niente due processi che si sovrascrivono il file.
+        self.on_change = None
 
     # ---- ciclo di vita -------------------------------------------------
     @classmethod
@@ -145,6 +149,12 @@ class Store:
             return          # si salva una volta sola, alla chiusura del blocco
         if self.autosave and self.path:
             self.save()
+        if self.on_change:
+            # un osservatore rotto non deve far fallire una modifica gia' fatta
+            try:
+                self.on_change()
+            except Exception:
+                pass
 
     @contextmanager
     def batch(self):

@@ -8,6 +8,23 @@ editor funzionante senza fare domande.
 
 ---
 
+## 0. Se devi solo *usarlo*
+
+Il pacchetto sta su PyPI col nome `vedit-mcp` (il nome `vedit` era occupato; il modulo Python
+resta `vedit`). Niente clone, niente compilazione:
+
+```bash
+claude mcp add vedit -- uvx vedit-mcp
+```
+
+L'interfaccia web viaggia già compilata dentro il pacchetto. ffmpeg no — è un programma, non
+un pacchetto Python: se manca, `vedit install-ffmpeg` (strumento MCP `install_ffmpeg`) scarica
+ffmpeg *e* ffprobe in `~/.vedit/bin` senza toccare il sistema.
+
+Il resto di questo file serve a chi la repo la deve **modificare**.
+
+---
+
 ## 1. Installazione: un comando
 
 ```bash
@@ -38,7 +55,7 @@ di inventarti una diagnosi.
 
 | Sintomo | Rimedio |
 |---|---|
-| `ffmpeg non trovato` | `python scripts/setup.py --install-ffmpeg`, oppure installalo a mano e mettilo nel `PATH`, oppure indica i binari con `VEDIT_FFMPEG` / `VEDIT_FFPROBE`. Senza ffmpeg non si renderizza niente: è l'unica dipendenza davvero obbligatoria. |
+| `ffmpeg non trovato` | `vedit install-ffmpeg` (scarica ffmpeg e ffprobe in `~/.vedit/bin`, nessun permesso di amministratore), oppure `python scripts/setup.py --install-ffmpeg` che usa winget / brew / apt, oppure indica i binari con `VEDIT_FFMPEG` / `VEDIT_FFPROBE`. Senza ffmpeg non si renderizza niente: è l'unica dipendenza davvero obbligatoria. |
 | `externally-managed-environment` | gestito da solo: lo script crea `.venv` e ci reinstalla dentro. |
 | `eseguibile in uso` (Windows) | l'interfaccia o il server MCP sono avviati e tengono `vedit-mcp.exe`. Chiudili e rilancia. |
 | `npm non trovato` | Node.js 18+ manca: CLI e MCP funzionano lo stesso, resta fuori solo l'interfaccia web. |
@@ -199,8 +216,16 @@ fatte:
 Se cambi quelle istruzioni, `tests/test_mcp.py` verifica che le regole restino: sono la parte
 che l'agente legge sempre.
 
-**Un progetto alla volta per file.** UI e server MCP salvano da soli dopo ogni modifica: se lo
-stesso `.json` è aperto in tutti e due, l'ultimo che salva vince. Non c'è un lock.
+### Far vedere il montaggio (open_ui)
+
+`open_ui` avvia l'interfaccia web **dentro il processo del server MCP** e restituisce
+l'indirizzo. Non è una seconda istanza: `api.attach()` fa lavorare la UI sullo *stesso* oggetto
+`Store` dell'agente, e `Store.on_change` fa aggiornare il browser a ogni modifica. Un solo
+scrittore, nessun file conteso. `close_ui` la chiude.
+
+**Un progetto alla volta per file.** Vale ancora se apri l'editor in un *altro* processo
+(`vedit ui` da terminale mentre l'agente monta): lì sono due Store sullo stesso `.json` e
+l'ultimo che salva vince, non c'è un lock. Con `open_ui` il problema non si pone.
 
 ---
 

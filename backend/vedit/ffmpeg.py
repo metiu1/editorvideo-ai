@@ -27,9 +27,26 @@ def binary(name: str = "ffmpeg") -> str:
     found = shutil.which(name)
     if found:
         return found
+    # ultimo posto dove guardare: la copia scaricata da vedit stesso. L'ffmpeg
+    # di sistema resta preferito perche' di solito ha piu' encoder hardware.
+    from . import ffbin
+
+    scaricato = ffbin.local(name)
+    if scaricato:
+        return scaricato
     raise FileNotFoundError(
-        f"{name} non trovato nel PATH. Installalo o imposta VEDIT_{name.upper()} sul percorso del binario."
+        f"{name} non trovato nel PATH. Scaricalo con `vedit install-ffmpeg` (nessun permesso di "
+        f"amministratore, finisce in {ffbin.bin_dir()}), installalo col gestore pacchetti del "
+        f"sistema, oppure imposta VEDIT_{name.upper()} sul percorso del binario."
     )
+
+
+def forget() -> None:
+    """Dimentica i percorsi trovati: da chiamare dopo aver installato ffmpeg."""
+    binary.cache_clear()
+    version.cache_clear()
+    filters.cache_clear()
+    encoders.cache_clear()
 
 
 def run(args: list[str], *, timeout: float | None = None, check: bool = True) -> subprocess.CompletedProcess:

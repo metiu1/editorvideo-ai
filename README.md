@@ -13,7 +13,8 @@ tutti dalle stesse operazioni.
 
 ## Indice
 
-- [Installazione in un comando](#installazione-in-un-comando)
+- [Usarlo senza installare niente](#usarlo-senza-installare-niente)
+- [Installazione in un comando (per modificarlo)](#installazione-in-un-comando-per-modificarlo)
 - [Darlo in mano a un agente](#darlo-in-mano-a-un-agente)
 - [Requisiti](#requisiti)
 - [Installazione](#installazione)
@@ -37,7 +38,41 @@ tutti dalle stesse operazioni.
 
 ---
 
-## Installazione in un comando
+## Usarlo senza installare niente
+
+Se ti interessa **usare** l'editor (non modificarlo), non serve clonare la repo. Il pacchetto
+sta su PyPI e `uvx` lo scarica ed esegue da solo, uguale su Windows, macOS e Linux:
+
+```bash
+claude mcp add vedit -- uvx vedit-mcp        # Claude Code: una riga e basta
+uvx --from vedit-mcp vedit ui                # oppure solo l'interfaccia web
+```
+
+Per gli altri client la stessa cosa in JSON (Cursor `.cursor/mcp.json`, Codex, VS Code):
+
+```json
+{ "mcpServers": { "vedit": { "command": "uvx", "args": ["vedit-mcp"] } } }
+```
+
+Serve [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pipx install uv`, o
+`winget install astral-sh.uv`, o `brew install uv`). Chi preferisce l'installazione classica:
+`pipx install vedit-mcp`, poi i comandi `vedit` e `vedit-mcp` sono nel `PATH`.
+
+**ffmpeg** è l'unica cosa che pip non può portare con sé, perché è un programma e non un
+pacchetto Python. Se manca, non serve cercarlo in giro: `vedit install-ffmpeg` scarica una
+build statica (ffmpeg *e* ffprobe) dentro `~/.vedit/bin` — niente amministratore, niente
+modifiche al sistema, si disinstalla cancellando la cartella. L'agente ha lo stesso comando
+come strumento `install_ffmpeg`. Se ffmpeg è già nel `PATH`, resta quello preferito: di solito
+ha più encoder hardware.
+
+Da agente si lavora a parole e si apre l'interfaccia solo quando serve guardare o mettere le
+mani: lo strumento **`open_ui`** avvia l'editor nel browser **sullo stesso progetto in
+memoria**, quindi le modifiche dell'agente si vedono subito nella timeline e viceversa, senza
+salvare o riaprire niente.
+
+---
+
+## Installazione in un comando (per modificarlo)
 
 ```bash
 git clone https://github.com/metiu1/editorvideo-ai.git
@@ -93,7 +128,7 @@ strumenti è disponibile subito (vedi [Uso da agente](#uso-da-agente-mcp)).
 | | |
 |---|---|
 | Python | 3.10 o più recente |
-| ffmpeg e ffprobe | nel `PATH`, oppure indicati con `VEDIT_FFMPEG` / `VEDIT_FFPROBE` |
+| ffmpeg e ffprobe | nel `PATH`, scaricati con `vedit install-ffmpeg`, o indicati con `VEDIT_FFMPEG` / `VEDIT_FFPROBE` |
 | Node.js | 18+, serve **solo** per compilare l'interfaccia la prima volta |
 | GPU | facoltativa. NVIDIA/Intel/AMD vengono rilevate e usate da sole per il render |
 

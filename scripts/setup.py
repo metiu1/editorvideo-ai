@@ -140,6 +140,8 @@ def check_ffmpeg(auto: bool) -> str:
         return step("ffmpeg", FAIL, f"{mancante} non trovato",
                     _FFMPEG_HINT.get(platform.system(), "installa ffmpeg e mettilo nel PATH")
                     + "   |   oppure: python scripts/setup.py --install-ffmpeg"
+                    + "   |   oppure: vedit install-ffmpeg (scarica i binari in ~/.vedit/bin,"
+                      " senza amministratore)"
                     + "   |   oppure: indica il percorso con VEDIT_FFMPEG / VEDIT_FFPROBE")
     code, out = run([ff, "-version"])
     ver = out.splitlines()[0].split(" ")[2] if code == 0 and out else "?"

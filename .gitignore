@@ -7,6 +7,10 @@ node_modules/
 
 # interfaccia compilata: si rigenera con `npm run build`
 frontend/dist/
+# copia della UI dentro il pacchetto, la fa scripts/build_wheel.py
+backend/vedit/webui/
+# pacchetti costruiti per PyPI
+dist/
 
 # ambienti virtuali
 .venv/

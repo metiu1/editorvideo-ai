@@ -139,8 +139,28 @@ def cmd_normalize(a) -> int:
     return 0
 
 
+def cmd_install_ffmpeg(a) -> int:
+    from . import ffbin
+
+    if not a.force and all(ffbin.installed().values()):
+        print(f"ffmpeg gia' scaricato in {ffbin.bin_dir()} (--force per riscaricarlo)")
+        return 0
+    print("scarico ffmpeg (build statica, finisce nella cache di vedit)...")
+    esito = ffbin.install(progress=lambda f: _pct(f), force=a.force)
+    ffmpeg.forget()
+    print(f"\nfatto: {esito['cartella']}")
+    print(f"ffmpeg: {ffmpeg.version()}")
+    return 0
+
+
+def _pct(frazione: float) -> None:
+    sys.stdout.write(f"\r  {frazione * 100:5.1f}%")
+    sys.stdout.flush()
+
+
 def cmd_doctor(a) -> int:
     print(f"ffmpeg: {ffmpeg.version()}")
+    print(f"  binario: {ffmpeg.binary('ffmpeg')}")
     info = hw.detect(force=a.force)
     for codec, enc in info.encoders.items():
         tag = "GPU" if info.is_hw(enc) else "CPU"
@@ -256,6 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--project", help="progetto da aprire all'avvio")
     u.add_argument("--no-browser", action="store_true")
     u.set_defaults(func=cmd_ui)
+
+    fi = sub.add_parser("install-ffmpeg",
+                        help="scarica ffmpeg/ffprobe nella cache di vedit (niente amministratore)")
+    fi.add_argument("--force", action="store_true", help="riscarica anche se ci sono gia'")
+    fi.set_defaults(func=cmd_install_ffmpeg)
 
     m = sub.add_parser("mcp", help="avvia il server MCP su stdio")
     m.set_defaults(func=cmd_mcp)

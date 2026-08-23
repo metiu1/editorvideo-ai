@@ -41,7 +41,21 @@ from . import ffmpeg, hw, presets, proxy, render
 from .model import TRANSITIONS, Effect
 from .store import PRESETS, EditError, Store
 
-FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+def _frontend_dir() -> Path:
+    """Dove sta l'interfaccia compilata.
+
+    Installata da pip la UI viaggia dentro il pacchetto (``vedit/webui``);
+    lavorando sulla repo sta in ``frontend/dist``, che e' anche quella che si
+    ricompila con ``npm run build`` — quindi in sviluppo vince la seconda solo
+    se la prima non c'e'.
+    """
+    dentro = Path(__file__).resolve().parent / "webui"
+    if (dentro / "index.html").is_file():
+        return dentro
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+FRONTEND = _frontend_dir()
 
 # operazioni di editing esposte alla UI (nomi dei metodi di Store)
 OPS = {
@@ -735,3 +749,93 @@ def serve(host: str = "127.0.0.1", port: int = 8760, project: str | None = None,
         threading.Timer(1.0, lambda: __import__("webbrowser").open(url)).start()
     print(f"vedit su {url}")
     uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+# --------------------------------------------------------------------------
+# interfaccia avviata da dentro un altro processo (server MCP)
+# --------------------------------------------------------------------------
+
+_background: dict[str, Any] = {}
+
+
+def attach(store: Store) -> None:
+    """Fa lavorare l'interfaccia sullo *stesso* Store di chi la avvia.
+
+    E' il punto che evita il conflitto descritto in AGENTS.md: se UI e agente
+    aprissero due Store sullo stesso file, ognuno salverebbe la propria copia e
+    l'ultimo vincerebbe. Condividendo l'oggetto c'e' un solo scrittore, e
+    ``on_change`` fa aggiornare il browser quando a montare e' l'agente.
+    """
+    if S.store is not None and S.store is not store:
+        S.store.on_change = None
+    S.store = store
+    store.on_change = lambda: S.publish({"type": "project"})
+
+
+def _porta_libera(host: str, porta: int) -> int:
+    import socket
+
+    for tentativo in range(porta, porta + 20):
+        with socket.socket() as s:
+            if s.connect_ex((host, tentativo)) != 0:
+                return tentativo
+    raise RuntimeError(f"nessuna porta libera fra {porta} e {porta + 20}")
+
+
+def serve_background(store: Store | None = None, host: str = "127.0.0.1", port: int = 8760,
+                     open_browser: bool = True) -> dict:
+    """Avvia l'interfaccia in un thread di questo processo e torna subito.
+
+    Chiamarla di nuovo non riavvia niente: aggancia l'eventuale nuovo progetto
+    al server gia' in piedi.
+    """
+    import uvicorn
+
+    if store is not None:
+        attach(store)
+
+    if _background.get("url"):
+        if open_browser:
+            __import__("webbrowser").open(_background["url"])
+        return {**_background, "avviato_ora": False,
+                "progetto": S.store.path if S.store else None}
+
+    mount_frontend()
+    port = _porta_libera(host, port)
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True, name="vedit-ui")
+    thread.start()
+
+    scadenza = time.time() + 15
+    while not server.started and thread.is_alive() and time.time() < scadenza:
+        time.sleep(0.05)
+    if not server.started:
+        raise RuntimeError("l'interfaccia non si e' avviata entro 15 secondi")
+
+    _background.update({"url": f"http://{host}:{port}", "host": host, "port": port,
+                        "server": server, "thread": thread})
+    if open_browser:
+        __import__("webbrowser").open(_background["url"])
+    return {"url": _background["url"], "host": host, "port": port, "avviato_ora": True,
+            "progetto": S.store.path if S.store else None,
+            "interfaccia_compilata": FRONTEND.is_dir()}
+
+
+def background_info() -> dict | None:
+    if not _background.get("url"):
+        return None
+    return {"url": _background["url"], "port": _background["port"],
+            "progetto": S.store.path if S.store else None}
+
+
+def stop_background() -> bool:
+    server = _background.get("server")
+    if not server:
+        return False
+    server.should_exit = True
+    thread = _background.get("thread")
+    if thread:
+        thread.join(timeout=10)
+    _background.clear()
+    return True

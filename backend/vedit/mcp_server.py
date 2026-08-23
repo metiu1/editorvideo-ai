@@ -13,6 +13,7 @@ Avvio: ``vedit-mcp`` (stdio).
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,11 @@ I tempi sono in secondi. Ogni parametro animabile accetta anche
 all'inizio della clip. project_info da' lo stato della timeline con gli id.
 Per un montaggio serrato usa add_clips: mette tutti i tagli in una chiamata sola,
 ed e' atomico.
+
+Se chi ti guida vuole vedere o correggere a mano, apri l'editor con open_ui:
+interfaccia e agente lavorano sullo stesso progetto, le modifiche si vedono da
+tutte e due le parti senza salvare niente. Se uno strumento dice che ffmpeg non
+c'e', install_ffmpeg lo scarica.
 
 == COME MONTARE ==
 
@@ -116,12 +122,24 @@ _current: list[str | None] = [None]
 # --------------------------------------------------------------------------
 
 
+def _ui_attach(s: Store) -> None:
+    """Se l'interfaccia e' aperta, falla lavorare sullo stesso progetto.
+
+    Cercata in ``sys.modules`` apposta: finche' nessuno chiama ``open_ui`` il
+    modulo ``api`` non viene nemmeno importato, e il server MCP resta leggero.
+    """
+    api = sys.modules.get("vedit.api")
+    if api is not None and api.background_info() and api.S.store is not s:
+        api.attach(s)
+
+
 def _store(project: str | None = None) -> Store:
     if project:
         key = str(Path(project).resolve())
         if key not in _stores:
             _stores[key] = Store.open(key)
         _current[0] = key
+        _ui_attach(_stores[key])
         return _stores[key]
     if _current[0] is None:
         raise EditError("nessun progetto aperto: usa project_create o project_open")
@@ -161,6 +179,7 @@ def project_create(path: str, name: str = "untitled", preset: str = "1080p",
     key = str(Path(s.path).resolve())
     _stores[key] = s
     _current[0] = key
+    _ui_attach(s)
     return {"path": s.path, "settings": s.summary()["settings"], "tracks": ["V1", "A1"]}
 
 
@@ -173,6 +192,7 @@ def project_open(path: str) -> dict:
     key = str(Path(path).resolve())
     _stores[key] = Store.open(key)
     _current[0] = key
+    _ui_attach(_stores[key])
     return _stores[key].summary()
 
 
@@ -1194,12 +1214,60 @@ async def render_video(output: str, quality: str = "high", codec: str = "h264",
 
 
 @mcp.tool()
+async def open_ui(port: int = 8760, open_browser: bool = True,
+                  project: str | None = None) -> dict:
+    """Apre l'interfaccia web sul progetto corrente e restituisce l'indirizzo.
+
+    Serve quando chi ti guida vuole *vedere* il montaggio o metterci le mani:
+    timeline, anteprima, inspector. Interfaccia e agente lavorano sullo stesso
+    progetto in memoria, quindi le modifiche si vedono da tutte e due le parti
+    senza salvare o riaprire niente. Chiamarla di nuovo non riavvia il server.
+    """
+    from . import api
+
+    s = _store(project)
+    esito = await _off(api.serve_background, s, "127.0.0.1", port, open_browser)
+    if not esito.get("interfaccia_compilata", True):
+        esito["avviso"] = ("interfaccia non compilata: da repo serve `npm run build` in frontend/ "
+                           "(o `python scripts/setup.py --rebuild`)")
+    return esito
+
+
+@mcp.tool()
+def close_ui() -> dict:
+    """Chiude l'interfaccia web avviata con open_ui."""
+    api = sys.modules.get("vedit.api")
+    if api is None:
+        return {"chiusa": False, "motivo": "interfaccia mai avviata"}
+    return {"chiusa": api.stop_background()}
+
+
+@mcp.tool()
+async def install_ffmpeg(force: bool = False) -> dict:
+    """Scarica ffmpeg e ffprobe nella cache di vedit, se il sistema non li ha.
+
+    Da usare quando uno strumento fallisce con "ffmpeg non trovato": non serve
+    l'amministratore e non tocca il sistema. L'ffmpeg di sistema, se c'e',
+    resta comunque quello preferito.
+    """
+    from . import ffbin
+
+    esito = await _off(ffbin.install, None, force)
+    ffmpeg.forget()
+    esito["ffmpeg"] = ffmpeg.version()
+    return esito
+
+
+@mcp.tool()
 async def system_info() -> dict:
     """Versione di ffmpeg, encoder hardware disponibili, cartella di cache."""
     info = await _off(hw.detect)
-    return {"ffmpeg": ffmpeg.version(), "encoder": info.encoders,
+    api = sys.modules.get("vedit.api")
+    return {"ffmpeg": ffmpeg.version(), "binario": ffmpeg.binary("ffmpeg"),
+            "encoder": info.encoders,
             "hardware_verificato": info.working,
-            "cache": str(proxy.cache_dir())}
+            "cache": str(proxy.cache_dir()),
+            "interfaccia": (api.background_info() if api else None)}
 
 
 @mcp.tool()
