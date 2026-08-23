@@ -142,6 +142,9 @@ def test_mask_keyframes_senza_soggetto():
 @pytest.fixture
 def video_con_persone(tmp_path):
     """L'asset di ultralytics (una fermata dell'autobus con passanti) come video."""
+    # ultralytics e' l'extra "vision": si tira dietro torch, quindi non c'e'
+    # sempre. Chi non ce l'ha salta questi tre, non li vede fallire.
+    pytest.importorskip("ultralytics", reason="extra 'vision' non installato")
     from ultralytics.utils import ASSETS
 
     out = tmp_path / "persone.mp4"

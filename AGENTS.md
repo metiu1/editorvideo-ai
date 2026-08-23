@@ -237,8 +237,17 @@ l'ultimo che salva vince, non c'è un lock. Con `open_ui` il problema non si pon
 ## 5. Convenzioni della repo
 
 - Codice, commenti e messaggi all'utente **in italiano**, come il resto del progetto.
-- Niente dipendenze nuove senza motivo: il core sta su ffmpeg e libreria standard, l'unico
-  extra facoltativo è `anthropic` per l'assistente.
+- Niente dipendenze nuove senza motivo. Il core sta su ffmpeg, libreria standard e `numpy`
+  — quest'ultimo non è facoltativo: senza, restano fuori `music_beats`, `plan_edit`,
+  `inspect_footage`, `match_color` e `check_cuts`, cioè scelta del materiale e montaggio a
+  tempo. Stessa cosa per Pillow: `preview_grid` e `color_scopes` ci stanno sopra, e guardare
+  il montaggio è la regola prima. Gli extra veri sono tre: `chat` (`anthropic`, l'assistente
+  nella UI), `vision` (`ultralytics`, riconoscimento del soggetto — si tira dietro torch) e
+  `transcribe` (`faster-whisper`, sottotitoli e pulizia del parlato). Senza gli extra il resto
+  dell'editor funziona identico e gli strumenti che li vogliono dicono come installarli.
+- `tests/test_dipendenze.py` legge gli import del backend e pretende che ognuno sia dichiarato
+  in `pyproject.toml`: un pacchetto che c'è sulla macchina di chi sviluppa ma non nel wheel
+  non si vede finché qualcuno non installa da PyPI.
 - Ogni comportamento nuovo arriva con un test; i render reali stanno dietro il marker `slow`.
 - Prima di dire che una modifica funziona: `pytest -m "not slow"` più il pezzo di `slow` che la
   tocca. Se hai cambiato la UI, anche `cd frontend && npm test`.

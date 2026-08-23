@@ -167,6 +167,26 @@ export ANTHROPIC_API_KEY=sk-ant-...          # Windows: setx ANTHROPIC_API_KEY s
 Senza chiave tutto il resto funziona identico: la scheda *assistente* mostra il motivo
 invece di fingere di andare.
 
+**Riconoscimento del soggetto (facoltativo).** `detect_subjects`, `track_mask` e
+`auto_reframe` usano YOLO, che si tira dietro torch — sono giga, quindi non arrivano
+con l'installazione normale:
+
+```bash
+pip install -e ".[vision]"                   # aggiunge ultralytics
+```
+
+**Trascrizione e sottotitoli (facoltativo).** `transcribe`, `make_captions`,
+`tighten_speech` e `censor_speech` girano su faster-whisper, che scarica un modello
+e macina CPU:
+
+```bash
+pip install -e ".[transcribe]"               # aggiunge faster-whisper
+```
+
+Senza gli extra, quegli strumenti dicono cosa manca e il resto dell'editor non se ne
+accorge. `numpy` e Pillow invece arrivano sempre: non sono extra, ci stanno sopra
+l'analisi del girato, il montaggio a tempo di musica e `preview_grid`.
+
 ---
 
 ## Avvio

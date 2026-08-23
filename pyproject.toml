@@ -24,6 +24,16 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
+    # non e' un extra: senza numpy restano fuori music_beats, plan_edit,
+    # inspect_footage, match_color e check_cuts, cioe' tutta la parte che
+    # sceglie il materiale e monta a tempo. Lo usano analyze, colormatch,
+    # review e vision.
+    "numpy>=1.24",
+    # preview_grid e color_scopes: guardare il montaggio non e' un accessorio,
+    # e' la regola prima delle istruzioni MCP. Senza Pillow crashano.
+    "pillow>=10.0",
+    # importato direttamente da mcp_server, non solo di rimbalzo da mcp
+    "anyio>=4.0",
 ]
 
 [project.urls]
@@ -35,6 +45,14 @@ Issues = "https://github.com/metiu1/editorvideo-ai/issues"
 dev = ["pytest>=8.0"]
 # serve solo per l'assistente dentro la UI; senza, il resto funziona uguale
 chat = ["anthropic>=0.40"]
+# riconoscimento del soggetto (YOLO): si tira dietro torch, sono giga. Resta
+# facoltativo apposta — senza, detect_subjects/track_mask/auto_reframe dicono
+# come installarlo e il resto dell'editor non se ne accorge.
+vision = ["ultralytics>=8.3"]
+# trascrizione e sottotitoli: scarica un modello e macina CPU, quindi non e'
+# di serie. Senza, transcribe/make_captions/tighten_speech/censor_speech
+# dicono cosa installare.
+transcribe = ["faster-whisper>=1.0"]
 
 [project.scripts]
 vedit = "vedit.cli:main"
