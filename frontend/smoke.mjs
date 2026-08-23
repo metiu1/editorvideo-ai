@@ -129,13 +129,24 @@ if (!bundle) throw new Error('nessun bundle in dist/assets: lancia prima `npm ru
 
 await import(pathToFileURL(`dist/assets/${bundle}`).href)
 
-await new Promise((r) => setTimeout(r, 400))
-
 const root = dom.window.document.getElementById('root')
-const html = root.innerHTML
+
+// Il primo montaggio passa da fetch e da un paio di giri di effetti: quanto ci
+// metta dipende dalla macchina, quindi si aspetta la *condizione* invece di un
+// tempo fisso. Un'attesa a orologio qui falliva sulle esecuzioni a freddo.
+const attendi = async (che, quale, ms = 8000) => {
+  const scadenza = Date.now() + ms
+  for (;;) {
+    const trovato = quale()
+    if (trovato) return trovato
+    if (Date.now() > scadenza) throw new Error(`atteso invano: ${che}`)
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
 
 // selezione di una clip: apre il pannello proprieta' con i keyframe
-const clip = root.querySelector('.clip')
+const clip = await attendi('clip in timeline', () => root.querySelector('.clip'))
+const html = root.innerHTML
 clip.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 40, clientY: 40 }))
 dom.window.document.dispatchEvent(new dom.window.PointerEvent('pointerup', { bubbles: true }))
 await new Promise((r) => setTimeout(r, 150))
@@ -150,6 +161,9 @@ const checks = [
   ['editor keyframe', afterClick.includes('keyframe alla testina')],
   ['effetti della clip', afterClick.includes('Correzione colore')],
   ['catalogo effetti', afterClick.includes('aggiungi effetto')],
+  // l'ordine della catena cambia il risultato: dalla UI si deve poter cambiare
+  ['ordine effetti', afterClick.includes('Sposta prima nella catena')
+    && afterClick.includes('Sposta dopo nella catena')],
   ['barra strumenti', html.includes('esporta')],
   ['elenco media', html.includes('clip.mp4')],
   ['tracce', html.includes('V1') && html.includes('A1')],

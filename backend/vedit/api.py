@@ -64,7 +64,7 @@ OPS = {
     "add_clip", "add_text", "add_color", "remove_clip", "move_clip", "trim_clip",
     "split_clip", "set_speed", "set_reverse", "set_transform", "set_audio",
     "set_fades", "set_clip", "set_text", "add_effect", "update_effect",
-    "remove_effect", "append_sequence", "crossfade", "set_transition", "close_gaps",
+    "remove_effect", "move_effect", "append_sequence", "crossfade", "set_transition", "close_gaps",
     "set_loudnorm", "set_settings", "undo", "redo", "save",
 }
 

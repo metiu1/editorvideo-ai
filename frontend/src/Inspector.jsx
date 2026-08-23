@@ -256,6 +256,18 @@ function Effects({ target, list, effects, clipTime, call, onProva }) {
                 onChange={(v) => call('update_effect', args({ index: e.i, enabled: v }))} />
               <b>{spec.label}</b>
               <span className="spacer" />
+              {/* l'ordine della catena cambia il risultato: denoise prima di
+                  sharpen pulisce e poi incide, al contrario incide il rumore */}
+              <button className="icon sm" title="Sposta prima nella catena"
+                disabled={e.i === 0}
+                onClick={() => call('move_effect', args({ index: e.i, to: e.i - 1 }))}>
+                <Icon name="su" size={13} />
+              </button>
+              <button className="icon sm" title="Sposta dopo nella catena"
+                disabled={e.i === list.length - 1}
+                onClick={() => call('move_effect', args({ index: e.i, to: e.i + 1 }))}>
+                <Icon name="giu" size={13} />
+              </button>
               <button className="icon sm danger" title="Rimuovi l'effetto"
                 onClick={() => call('remove_effect', args({ index: e.i }))}>
                 <Icon name="chiudi" size={13} />

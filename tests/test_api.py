@@ -212,3 +212,34 @@ def test_frame_prova_effetto_non_tocca_il_progetto(client, tmp_path, assets):
     assert client.get("/api/state").json()["revision"] == prima
 
     assert client.get("/api/frame", params={"t": 1.0, "effect": "inesistente"}).status_code == 400
+
+
+def test_ordine_effetti_via_api(client, tmp_path, assets):
+    """L'ordine della catena si cambia dalla UI, non solo da MCP.
+
+    Denoise prima di sharpen pulisce e poi incide; l'ordine opposto incide
+    anche il rumore. Se ``move_effect`` non e' fra le operazioni esposte, chi
+    monta dall'interfaccia quella scelta non ce l'ha.
+    """
+    _create(client, tmp_path)
+    media_id = client.post("/api/op/import_media", json={"paths": [assets["red"]]}).json()["result"][0]["id"]
+    clip = client.post("/api/op/add_clip", json={"media_id": media_id, "duration": 2.0}).json()["result"]["id"]
+
+    for effetto in ("denoise", "sharpen"):
+        assert client.post("/api/op/add_effect", json={"clip_id": clip, "effect": effetto}).status_code == 200
+
+    def ordine():
+        stato = client.get("/api/state").json()
+        c = stato["project"]["tracks"][0]["clips"][0]
+        # l'indice serve alla UI per indirizzare l'effetto: dev'esserci ed essere progressivo
+        assert [e["i"] for e in c["effects"]] == list(range(len(c["effects"])))
+        return [e["type"] for e in c["effects"]]
+
+    assert ordine() == ["denoise", "sharpen"]
+
+    r = client.post("/api/op/move_effect", json={"clip_id": clip, "index": 1, "to": 0})
+    assert r.status_code == 200, r.text
+    assert ordine() == ["sharpen", "denoise"]
+
+    client.post("/api/op/undo", json={})
+    assert ordine() == ["denoise", "sharpen"]

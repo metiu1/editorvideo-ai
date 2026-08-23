@@ -70,10 +70,15 @@ la scheda *assistente* spiega perché è spenta; nessun'altra funzione ne risent
 
 ```bash
 vedit doctor                             # ffmpeg, encoder GPU, filtri
-pytest -m "not slow"                     # logica, senza ffmpeg (~15s)
-pytest                                   # tutto, render reali inclusi (~2min)
+pytest -m "not slow"                     # logica e API, niente render (2-3 min)
+pytest                                   # tutto, render reali inclusi (3-5 min)
 cd frontend && npm test                  # funzioni pure UI + montaggio in jsdom
 ```
+
+**ffmpeg serve anche ai test veloci**: `tests/conftest.py` genera i sorgenti
+sintetici con ffmpeg, e mezza suite legge i media con ffprobe. Il marker `slow`
+separa i *render* veri, non l'uso di ffmpeg. I tempi qui sopra sono misurati su
+una macchina con GPU: senza, la parte `slow` va parecchio piu' lenta.
 
 Prova end-to-end in tre comandi, utile come verifica dopo una modifica:
 
