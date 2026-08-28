@@ -1,6 +1,10 @@
 # vedit
 
-**Editing eats your time. This gives it back.**
+**A non-linear video editor an AI agent can actually drive** — web timeline, chat assistant
+and MCP server on one deterministic ffmpeg engine. Python + React, Windows / macOS / Linux,
+MIT.
+
+### Editing eats your time. This gives it back.
 
 Cutting a two-minute video is twenty minutes of work and two hours of dragging rectangles:
 finding the good take inside forty minutes of footage, trimming frame by frame, matching the
@@ -60,6 +64,7 @@ vedit sits in the middle, and it does so honestly:
 - [How it works](#how-it-works)
 - [Tests](#tests)
 - [Known limits](#known-limits)
+- [FAQ](#faq)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -464,9 +469,42 @@ cannot silently go missing from the wheel.
 
 ---
 
+## FAQ
+
+**Does it upload my footage anywhere?**
+No. Everything runs on your machine: ffmpeg does the work, the project is a local `.json`, the
+media never leaves the folder it is in. The only thing that talks to the network is the
+optional chat assistant (your own Anthropic key) and `install-ffmpeg`, which downloads ffmpeg.
+
+**Do I need a GPU?**
+No. If you have one (NVIDIA / Intel / AMD) it is detected and used for encoding automatically;
+without one everything still works, renders just take longer.
+
+**Which agents can drive it?**
+Any MCP client: Claude Code, Claude Desktop, Cursor, Codex, VS Code, or your own via the MCP
+SDK. `claude mcp add vedit -- uvx vedit-mcp`, or the equivalent JSON in the client's config.
+
+**Is this "AI generated video"?**
+No. Nothing is generated — it edits *your* footage with ffmpeg. The AI part is the agent
+deciding *where to cut*, and you can see and undo every decision in the timeline.
+
+**Does the agent edit blind?**
+It doesn't have to: `preview_frame` returns the real rendered frame and `preview_grid` the
+whole edit as a contact sheet, so the agent looks at its own work before rendering.
+
+**What if ffmpeg is missing?**
+`vedit install-ffmpeg` puts a static ffmpeg + ffprobe in `~/.vedit/bin`. No admin rights, no
+system changes, removed by deleting the folder.
+
+**Can I use it without the agent, as a normal editor?**
+Yes — `vedit ui` is a full timeline editor with tracks, keyframes, effects and export. MCP is
+one of three front ends, not a requirement.
+
+---
+
 ## Contributing
 
-Issues and pull requests are welcome. Before opening one:
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
 
 - read [`AGENTS.md`](AGENTS.md) — it is the contract for humans and coding agents alike;
 - code, comments and user-facing messages are **in Italian**, like the rest of the project
