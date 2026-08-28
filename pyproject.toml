@@ -6,16 +6,25 @@
 # importabile resta `vedit`.
 name = "vedit-mcp"
 version = "0.1.0"
-description = "Editor video non lineare guidabile da un agente (MCP), con interfaccia web. Timeline -> ffmpeg."
+description = "Non-linear video editor an AI agent can actually drive (MCP), with a web UI. Timeline -> ffmpeg."
 readme = "README.md"
 requires-python = ">=3.10"
-keywords = ["video", "editing", "ffmpeg", "mcp", "timeline", "nle"]
+keywords = [
+    "video", "video-editing", "video-editor", "ffmpeg", "mcp",
+    "model-context-protocol", "timeline", "nle", "ai-agent", "claude",
+    "automation", "keyframes",
+]
 authors = [{ name = "metiu1" }]
+license = { text = "MIT" }
 classifiers = [
     "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Natural Language :: Italian",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Video",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Video :: Non-Linear Editor",
 ]
@@ -40,6 +49,7 @@ dependencies = [
 Homepage = "https://github.com/metiu1/editorvideo-ai"
 Source = "https://github.com/metiu1/editorvideo-ai"
 Issues = "https://github.com/metiu1/editorvideo-ai/issues"
+Documentation = "https://github.com/metiu1/editorvideo-ai#readme"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

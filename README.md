@@ -1,78 +1,100 @@
 # vedit
 
-Editor video non lineare con **tre modi di guidarlo sullo stesso motore**: un'interfaccia
-web per montare a mano, un assistente in chat dentro l'editor, e un server MCP per farci
-lavorare un agente da fuori.
+**Editing eats your time. This gives it back.**
 
-Il progetto è un documento JSON. Il render è una funzione pura di quel documento, compilata
-in un unico `filter_complex` di ffmpeg: niente stato nascosto, lo stesso progetto produce
-sempre lo stesso file. Ed è il motivo per cui i tre modi non possono divergere — passano
-tutti dalle stesse operazioni.
+Cutting a two-minute video is twenty minutes of work and two hours of dragging rectangles:
+finding the good take inside forty minutes of footage, trimming frame by frame, matching the
+cuts to the music, tweaking the same volume curve for the tenth time. None of that is a
+creative decision. All of it is time.
 
----
-
-## Indice
-
-- [Usarlo senza installare niente](#usarlo-senza-installare-niente)
-- [Installazione in un comando (per modificarlo)](#installazione-in-un-comando-per-modificarlo)
-- [Darlo in mano a un agente](#darlo-in-mano-a-un-agente)
-- [Requisiti](#requisiti)
-- [Installazione](#installazione)
-- [Avvio](#avvio)
-- [L'interfaccia, pannello per pannello](#linterfaccia-pannello-per-pannello)
-  - [Media](#1-media-pannello-sinistro-scheda-media)
-  - [Libreria](#2-libreria-pannello-sinistro-scheda-libreria)
-  - [Monitor e anteprima](#3-monitor-e-anteprima-centro)
-  - [Timeline e tracce](#4-timeline-e-tracce-in-basso)
-  - [Proprietà](#5-proprietà-pannello-destro-scheda-proprietà)
-  - [Assistente](#6-assistente-pannello-destro-scheda-assistente)
-  - [Esportare](#7-esportare)
-- [Scorciatoie da tastiera](#scorciatoie-da-tastiera)
-- [Riga di comando](#riga-di-comando)
-- [Uso da agente (MCP)](#uso-da-agente-mcp)
-- [Cosa sa fare](#cosa-sa-fare)
-- [Keyframe](#keyframe)
-- [Come è fatto](#come-è-fatto)
-- [Test](#test)
-- [Limiti noti](#limiti-noti)
-
----
-
-## Usarlo senza installare niente
-
-Se ti interessa **usare** l'editor (non modificarlo), non serve clonare la repo. Il pacchetto
-sta su PyPI e `uvx` lo scarica ed esegue da solo, uguale su Windows, macOS e Linux:
+vedit is a real non-linear video editor whose entire project is a JSON document, and whose
+render is a pure function of that document compiled into a single ffmpeg `filter_complex`.
+That one design choice is what lets you drive it **three ways at once** — a web timeline you
+edit by hand, a chat assistant inside the editor, and an **MCP server** so a coding agent
+(Claude Code, Cursor, Codex…) can cut the video for you while you watch the timeline move.
 
 ```bash
-claude mcp add vedit -- uvx vedit-mcp        # Claude Code: una riga e basta
-uvx --from vedit-mcp vedit ui                # oppure solo l'interfaccia web
+claude mcp add vedit -- uvx vedit-mcp     # that is the whole install
 ```
 
-Per gli altri client la stessa cosa in JSON (Cursor `.cursor/mcp.json`, Codex, VS Code):
+![vedit demo](https://raw.githubusercontent.com/metiu1/editorvideo-ai/main/docs/vedit-demo.gif)
+
+[![ci](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/vedit-mcp.svg)](https://pypi.org/project/vedit-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/vedit-mcp.svg)](https://pypi.org/project/vedit-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+> 🇮🇹 Questo README in italiano: [README.it.md](README.it.md). Code, comments and UI messages
+> are in Italian — that is the project convention.
+
+---
+
+## Why this exists
+
+Most "AI video" tools generate a video for you and give you back a file you cannot fix.
+An editor gives you every knob and none of the time back.
+
+vedit sits in the middle, and it does so honestly:
+
+| | |
+|---|---|
+| **An agent can actually edit** | 77 MCP tools that are the *same* operations as the buttons: cut, split, speed, keyframes, effects, transitions, render. Nothing is agent-only, nothing is UI-only. |
+| **The agent can see what it did** | `preview_frame` returns the **real rendered frame**, `preview_grid` the whole edit as a contact sheet. An agent that guesses produces garbage; this one looks. |
+| **It cuts on the beat, for real** | `music_beats` returns BPM, beat and bar length, first-beat offset and an energy profile, so cuts land on the music instead of near it. |
+| **It picks the takes** | `plan_edit` splits shots longer than 12s into their own segments and scores them individually — three minutes of continuous footage becomes dozens of candidates with a real in-point. |
+| **Same project, same file** | The render is deterministic. No hidden state, no "works in the preview, breaks on export". |
+| **You keep the timeline** | Whatever the agent does shows up in the web UI, on the same in-memory project, and undoes with one Ctrl+Z. |
+
+---
+
+## Table of contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Driving it from an agent (MCP)](#driving-it-from-an-agent-mcp)
+- [The web interface, panel by panel](#the-web-interface-panel-by-panel)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Command line](#command-line)
+- [What it can do](#what-it-can-do)
+- [Keyframes](#keyframes)
+- [How it works](#how-it-works)
+- [Tests](#tests)
+- [Known limits](#known-limits)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Install
+
+### Just to use it — nothing to clone
+
+The package is on PyPI as **`vedit-mcp`** (the name `vedit` was taken; the Python module is
+still `vedit`). The compiled web interface ships **inside the package**, so there is no build
+step:
+
+```bash
+claude mcp add vedit -- uvx vedit-mcp        # Claude Code: one line
+uvx --from vedit-mcp vedit ui                # or just the web editor
+```
+
+Same JSON for every other client (Cursor `.cursor/mcp.json`, Codex, VS Code):
 
 ```json
 { "mcpServers": { "vedit": { "command": "uvx", "args": ["vedit-mcp"] } } }
 ```
 
-Serve [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pipx install uv`, o
-`winget install astral-sh.uv`, o `brew install uv`). Chi preferisce l'installazione classica:
-`pipx install vedit-mcp`, poi i comandi `vedit` e `vedit-mcp` sono nel `PATH`.
+You need [uv](https://docs.astral.sh/uv/getting-started/installation/) (`pipx install uv`,
+`winget install astral-sh.uv`, `brew install uv`). Prefer a classic install?
+`pipx install vedit-mcp`, then `vedit` and `vedit-mcp` are on your `PATH`.
 
-**ffmpeg** è l'unica cosa che pip non può portare con sé, perché è un programma e non un
-pacchetto Python. Se manca, non serve cercarlo in giro: `vedit install-ffmpeg` scarica una
-build statica (ffmpeg *e* ffprobe) dentro `~/.vedit/bin` — niente amministratore, niente
-modifiche al sistema, si disinstalla cancellando la cartella. L'agente ha lo stesso comando
-come strumento `install_ffmpeg`. Se ffmpeg è già nel `PATH`, resta quello preferito: di solito
-ha più encoder hardware.
+**ffmpeg** is the one thing pip cannot bring along — it is a program, not a Python package.
+If it is missing, don't go hunting: `vedit install-ffmpeg` downloads a static build of ffmpeg
+*and* ffprobe into `~/.vedit/bin`. No administrator rights, no system changes, uninstalled by
+deleting the folder. The agent has the same thing as the `install_ffmpeg` tool. If ffmpeg is
+already on your `PATH`, that one wins — it usually has more hardware encoders.
 
-Da agente si lavora a parole e si apre l'interfaccia solo quando serve guardare o mettere le
-mani: lo strumento **`open_ui`** avvia l'editor nel browser **sullo stesso progetto in
-memoria**, quindi le modifiche dell'agente si vedono subito nella timeline e viceversa, senza
-salvare o riaprire niente.
-
----
-
-## Installazione in un comando (per modificarlo)
+### To hack on it — one command
 
 ```bash
 git clone https://github.com/metiu1/editorvideo-ai.git
@@ -80,444 +102,386 @@ cd editorvideo-ai
 python scripts/setup.py
 ```
 
-Lo script fa tutto: dipendenze Python, interfaccia web compilata, server MCP registrato,
-`vedit doctor` e i test veloci come verifica. Stampa una riga per passo e alla fine dice cosa
-manca ancora e come rimediare. Rilanciarlo è sicuro: quello che è già a posto viene saltato.
+The script does everything: Python dependencies, compiled web interface, MCP server
+registered, then `vedit doctor` and the fast tests as verification. It prints one line per
+step and ends by telling you what is still missing and how to fix it. Re-running it is safe —
+anything already in place is skipped.
 
 ```bash
-python scripts/setup.py --venv             # dipendenze in .venv invece che nell'interprete corrente
-python scripts/setup.py --install-ffmpeg   # prova a installare ffmpeg con winget / brew / apt
-python scripts/setup.py --no-frontend      # solo CLI e MCP, niente interfaccia web
-python scripts/setup.py --rebuild          # ricompila la UI dopo aver toccato frontend/src
-python scripts/setup.py --json             # esito come JSON, per gli script e per gli agenti
+python scripts/setup.py --venv             # dependencies in .venv instead of the current interpreter
+python scripts/setup.py --install-ffmpeg   # try winget / brew / apt
+python scripts/setup.py --no-frontend      # CLI and MCP only, no web interface
+python scripts/setup.py --rebuild          # rebuild the UI after touching frontend/src
+python scripts/setup.py --json             # machine-readable result, for scripts and agents
 ```
 
-Poi:
+Then `vedit ui` → <http://127.0.0.1:8760>.
 
-```bash
-vedit ui                                   # http://127.0.0.1:8760
-```
-
-L'unica cosa che lo script non può inventarsi è **ffmpeg**: se manca e `--install-ffmpeg` non
-riesce, installalo a mano ([ffmpeg.org](https://ffmpeg.org/download.html)) o indica i binari con
-`VEDIT_FFMPEG` / `VEDIT_FFPROBE`. Chi preferisce i passaggi a mano li trova in
-[Installazione](#installazione).
-
----
-
-## Darlo in mano a un agente
-
-Serve solo l'indirizzo della repo. Da incollare al proprio agente di codice:
-
-> Clona `https://github.com/metiu1/editorvideo-ai.git`, entra nella cartella, leggi `AGENTS.md`
-> e installa tutto seguendo quelle istruzioni. Poi dimmi com'è andata.
-
-`AGENTS.md` (che `CLAUDE.md` importa, così vale per Claude Code, Codex, Cursor e gli altri)
-contiene il comando di installazione, i guasti tipici col rimedio, come verificare, la mappa
-del codice con le regole per modificarlo e l'uso del server MCP. Con Claude Code c'è anche il
-comando `/setup`, che installa e riferisce l'esito.
-
-Finita l'installazione l'agente può **usare** l'editor, non solo compilarlo: `.mcp.json` è già
-nella repo e lo script lo allinea all'interprete giusto, quindi il server `vedit` coi suoi
-strumenti è disponibile subito (vedi [Uso da agente](#uso-da-agente-mcp)).
-
----
-
-## Requisiti
+### Requirements
 
 | | |
 |---|---|
-| Python | 3.10 o più recente |
-| ffmpeg e ffprobe | nel `PATH`, scaricati con `vedit install-ffmpeg`, o indicati con `VEDIT_FFMPEG` / `VEDIT_FFPROBE` |
-| Node.js | 18+, serve **solo** per compilare l'interfaccia la prima volta |
-| GPU | facoltativa. NVIDIA/Intel/AMD vengono rilevate e usate da sole per il render |
+| Python | 3.10+ |
+| ffmpeg + ffprobe | on `PATH`, downloaded with `vedit install-ffmpeg`, or pointed at with `VEDIT_FFMPEG` / `VEDIT_FFPROBE` |
+| Node.js | 18+, **only** to compile the interface from source the first time |
+| GPU | optional. NVIDIA / Intel / AMD are detected and used for rendering automatically |
 
-Verifica ffmpeg con `ffmpeg -version`. Se manca: [ffmpeg.org/download](https://ffmpeg.org/download.html)
-(su Windows la build "essentials" di gyan.dev va benissimo).
+### Optional extras
+
+Everything below is optional; without them the rest of the editor behaves identically and the
+tools that need them say what to install.
+
+```bash
+pip install -e ".[chat]"        # anthropic — the chat assistant inside the UI (+ ANTHROPIC_API_KEY)
+pip install -e ".[vision]"      # ultralytics — detect_subjects, track_mask, auto_reframe (pulls torch)
+pip install -e ".[transcribe]"  # faster-whisper — transcribe, make_captions, tighten_speech, censor_speech
+```
+
+`numpy` and Pillow are **not** extras: footage analysis, music-timed editing, `preview_grid`
+and `color_scopes` stand on them, and looking at your edit is rule number one.
 
 ---
 
-## Installazione
+## Quick start
 
-Gli stessi passi che fa `python scripts/setup.py`, uno per uno, per chi li vuole in mano.
-
-```bash
-git clone https://github.com/metiu1/editorvideo-ai.git
-cd editorvideo-ai
-
-pip install -e .                 # installa i comandi vedit e vedit-mcp
-vedit doctor                     # controlla ffmpeg, encoder GPU, filtri disponibili
-
-cd frontend
-npm install
-npm run build                    # compila l'interfaccia in frontend/dist
-cd ..
-```
-
-`npm run build` va rifatto solo se modifichi il codice dell'interfaccia. Se ti dimentichi,
-il server te lo dice invece di mostrare una pagina bianca.
-
-**Assistente in chat (facoltativo).** Serve una credenziale Anthropic:
+End to end, three commands:
 
 ```bash
-pip install -e ".[chat]"                     # aggiunge il pacchetto anthropic
-export ANTHROPIC_API_KEY=sk-ant-...          # Windows: setx ANTHROPIC_API_KEY sk-ant-...
+vedit new film.json --preset 1080p
+vedit import film.json shots/*.mp4 music.mp3 && vedit info film.json   # prints media ids
+vedit add film.json <media_id> --duration 3 && vedit render film.json out.mp4
 ```
 
-Senza chiave tutto il resto funziona identico: la scheda *assistente* mostra il motivo
-invece di fingere di andare.
-
-**Riconoscimento del soggetto (facoltativo).** `detect_subjects`, `track_mask` e
-`auto_reframe` usano YOLO, che si tira dietro torch — sono giga, quindi non arrivano
-con l'installazione normale:
+Or open the editor and do it by hand:
 
 ```bash
-pip install -e ".[vision]"                   # aggiunge ultralytics
+vedit ui                                     # http://127.0.0.1:8760
+vedit ui --project film.json                 # opening a project directly
+vedit ui --port 9000 --no-browser
 ```
 
-**Trascrizione e sottotitoli (facoltativo).** `transcribe`, `make_captions`,
-`tighten_speech` e `censor_speech` girano su faster-whisper, che scarica un modello
-e macina CPU:
-
-```bash
-pip install -e ".[transcribe]"               # aggiunge faster-whisper
-```
-
-Senza gli extra, quegli strumenti dicono cosa manca e il resto dell'editor non se ne
-accorge. `numpy` e Pillow invece arrivano sempre: non sono extra, ci stanno sopra
-l'analisi del girato, il montaggio a tempo di musica e `preview_grid`.
+The `.json` **is** the project: your video files stay where they are, nothing is copied.
+Format presets: `1080p`, `1080p60`, `4k`, `720p`, `vertical` (9:16, for reels and shorts),
+`vertical60`, `square`.
 
 ---
 
-## Avvio
+## Driving it from an agent (MCP)
+
+`.mcp.json` is already in the repo, so opening this folder in Claude Code offers the `vedit`
+server on first launch (approve it once). Anywhere else:
 
 ```bash
-vedit ui                                     # apre il browser su http://127.0.0.1:8760
-vedit ui --project miofilm.json              # aprendo già un progetto
-vedit ui --port 9000 --no-browser            # su un'altra porta, senza aprire il browser
+claude mcp add vedit -- uvx vedit-mcp
 ```
 
-Il primo progetto lo crei con **nuovo** nella barra in alto: scegli il file `.json` e il
-formato (`1080p`, `4k`, `vertical` per reel e short, `square`, …). Il `.json` è il progetto:
-i video restano dove sono, non vengono copiati.
+Typical tool flow:
 
-Un progetto nuovo parte con **una traccia video e una audio**. Ne aggiungi quante ne vuoi,
-quando ti servono (vedi [Timeline e tracce](#4-timeline-e-tracce-in-basso)).
+```
+project_create → import_media → plan_edit (choose the material) → add_clips
+   → refine (set_transition, set_speed, set_transform, add_effect, set_audio)
+   → preview_grid to look at it → render_video
+```
+
+Times are in seconds. Every animatable parameter also accepts a keyframe block —
+`{"kf": [{"t": 0, "v": 0}, {"t": 2, "v": 1, "ease": "ease_in_out"}]}`, with `t` relative to
+the start of the clip. `project_info` returns the timeline state with ids.
+
+**Cutting many clips:** use `add_clips`, which places all cuts in a single atomic call. One
+call per cut is slow, floods the undo history for what is one gesture, and leaves half a
+timeline behind if something breaks midway.
+
+```json
+[{"media": "m1b1a", "start": 0.0, "in": 122.5, "duration": 1.5},
+ {"media": "m9155", "start": 1.5, "in": 98.5,  "duration": 0.75}]
+```
+
+**Showing the result:** `open_ui` starts the web interface **inside the MCP server process**
+and returns the address. It is not a second instance — the UI works on the *same* `Store`
+object as the agent, and every change shows up in the browser live. One writer, no file
+contention. `close_ui` shuts it down.
+
+**The editing rules ship with the server.** `mcp_server.ISTRUZIONI` states them, so they reach
+any client, and they are there because they are the actual defects of videos that come out of
+here — decisions not made, not tool limits:
+
+1. **the music must move** — a fixed volume for the whole duration is the first thing that
+   makes a video feel flat; automate the gain with keyframes and pick the section with
+   `music_beats`;
+2. **not every cut is a hard cut** — the hard cut is the default, not the only option; every
+   transition still needs a reason;
+3. **never the same shot twice** — if the material is not enough, make the video shorter;
+4. **after ten seconds you owe the viewer new information** — cutting faster on the same
+   images saves nothing;
+5. **cinematic is a choice, not a filter** — one strong moment held for three seconds beats
+   ten half-seconds.
+
+Full agent contract, including the code map and the rules for modifying it:
+[`AGENTS.md`](AGENTS.md) (imported by `CLAUDE.md`, so it applies to Claude Code, Codex, Cursor
+and the rest).
+
+> **One project per file at a time.** The UI and the MCP server both autosave; if you keep the
+> same `.json` open in two processes, the last one to save wins. With `open_ui` the problem
+> does not arise.
 
 ---
 
-## L'interfaccia, pannello per pannello
+## The web interface, panel by panel
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  barra: nuovo · apri · salva · ↶↷ · +video +audio +testo · esporta   │
+│  bar: new · open · save · ↶↷ · +video +audio +text · export          │
 ├───────────────┬──────────────────────────────────┬───────────────────┤
-│ media         │  programma / sorgente            │ proprietà         │
-│ libreria      │  ┌────────────────────────────┐  │ assistente        │
-│               │  │      anteprima             │  │                   │
-│  (schede)     │  └────────────────────────────┘  │   (schede)        │
-│               │  ▶ ⏮  0:01.2/0:13.0  zoom tracce │                   │
+│ media         │  program / source                │ properties        │
+│ library       │  ┌────────────────────────────┐  │ assistant         │
+│               │  │        preview             │  │                   │
+│  (tabs)       │  └────────────────────────────┘  │   (tabs)          │
+│               │  ▶ ⏮  0:01.2/0:13.0  zoom tracks │                   │
 │               ├──────────────────────────────────┤                   │
 │               │  timeline: V3 V2 V1 A1 …         │                   │
 └───────────────┴──────────────────────────────────┴───────────────────┘
 ```
 
-Le zone si ridimensionano trascinando i divisori tra loro; le misure restano salvate.
+Panels resize by dragging the dividers, and the sizes are remembered.
 
-### 1. Media (pannello sinistro, scheda *media*)
+**1. Media.** `+` imports files *leaving them where they are*. Dragging files from the desktop
+**copies** them into `media/` next to the project (the browser does not hand over the source
+path) — for heavy files use `+`. `📁+` creates a folder, which is just a label on the media.
+Click opens a media in the *source* monitor, double click appends it to the timeline, drag
+puts it exactly where you want.
 
-- **`+`** importa file *lasciandoli dove sono*.
-- **Trascinare file dal desktop** dentro la finestra li **copia** in `media/` accanto al
-  progetto (il browser non passa il percorso di origine). Per file pesanti usa `+`.
-- **`📁+`** crea una cartella: è solo un'etichetta sul media, non sposta niente su disco.
-- **Clic** su un media lo apre nel monitor *sorgente*; **doppio clic** lo accoda in timeline;
-  **trascina** su una traccia per metterlo dove vuoi.
+**2. Library.** Pre-tuned looks, audio chains and transitions, with a name instead of twenty
+parameters: colour looks (cinema teal & orange, black and white, warm sunset, faded film…),
+stylised (VHS, dream, censor), retouch (sharpen, clean up, vignette, stabilise); voice and
+music chains; dissolve, iris, wipe and slide in four directions. Click applies to the selected
+clip — a video look with nothing selected goes on the **master**, i.e. the whole video. Drag a
+preset **onto a clip** to apply it there. A preset is only a chain of effects: one Ctrl+Z
+undoes it and every parameter stays editable.
 
-### 2. Libreria (pannello sinistro, scheda *libreria*)
+**3. Monitor and preview.** Two tabs: *program* (the timeline) and *source* (one media alone).
+When paused, the preview is the frame **rendered by ffmpeg**, so it is identical to the final
+result, effects included. ▶ plays 12-second segments while preparing the next one in the
+background; hit **proxy** in the top bar to make everything much faster. With a clip selected
+you get the transform box: drag the image to move it, the corners to scale it. In the *source*
+monitor, `[` and `]` mark in and out, then **insert** puts just that piece at the playhead.
 
-Look, catene audio e transizioni già tarate, con un nome invece di venti parametri.
+**4. Timeline and tracks.** Track count is **not fixed**: a new project has one video and one
+audio track, and you add more with `+ video` / `+ audio`. Every track header carries: rename
+(double click), ▲▼ to reorder (for video, order **is** the stacking — higher = drawn on top),
+👁/🔊 hide or mute, **S** for solo, 🔒 lock (protects clips from moves, cuts, effects and
+deletion), ✕ delete, and a volume slider. A track excluded from the render is visibly faded
+with a struck-through name; a locked one is hatched. Clips drag between tracks, edges trim,
+snapping catches other clips and the playhead, video clips show filmstrips and audio clips
+their waveform.
 
-| Scheda | Contenuto |
-|---|---|
-| **look** | Colore (cinema teal & orange, bianco e nero, caldo tramonto, sbiadito pellicola…), Stilizzati (VHS, sogno, censura), Ritocco (nitido, pulisci ripresa, vignettatura, stabilizza) |
-| **audio** | Voce (voce pulita, voce radiofonica), Effetti (telefono, sala grande, eco), Musica (musica sotto la voce, volume costante) |
-| **transizioni** | dissolvenza, iris, tendina e scorrimento nelle quattro direzioni |
+**5. Properties.** With a clip selected: name, start, duration, in-point, framing, speed and
+reverse, fades, outgoing transition, position / scale / rotation / opacity, audio (gain in dB,
+pan, fades), effects. The **◆** button next to a parameter makes it **animated** and opens the
+keyframe editor, with times relative to the start of the clip. With nothing selected you get
+the project: resolution, fps, background, EBU R128 normalisation of the mix, master effects.
 
-- **Clic** applica alla clip selezionata. Un look video senza clip selezionata va sul
-  **master**, cioè su tutto il video. In fondo al pannello c'è sempre scritto su cosa finirà.
-- **Trascina** un preset **sopra una clip** in timeline per applicarlo a quella.
-- Un preset è solo una catena di effetti: si annulla con **un solo** Ctrl+Z e resta tutto
-  regolabile dal pannello proprietà.
+**6. Assistant.** Ask for a change in plain language and it happens on the project — "drop the
+first 2 seconds of the first clip", "dissolve between the two shots", "move the music to its
+own track and take it down 6 dB". Its tools **are the same operations as the buttons**: what it
+does appears in the timeline and undoes with Ctrl+Z, exactly like your own edit. Requires
+`ANTHROPIC_API_KEY`; without it, the tab explains why it is off and nothing else is affected.
 
-### 3. Monitor e anteprima (centro)
-
-Due schede: **programma** (la timeline) e **sorgente** (un media da solo).
-
-- Da fermo l'anteprima è il fotogramma **renderizzato da ffmpeg**, quindi identico al
-  risultato finale, effetti compresi.
-- **▶** riproduce segmenti da 12s preparando il successivo in sottofondo. Il primo segmento
-  va atteso; premi **proxy** nella barra in alto per rendere tutto molto più rapido.
-- Con una clip selezionata compare il **riquadro di trasformazione**: trascina l'immagine per
-  spostarla, gli angoli per ridimensionarla.
-- Nel monitor *sorgente*: `[` e `]` segnano attacco e stacco, poi **inserisci** mette solo
-  quel pezzo alla testina — o lo trascini sulla traccia che vuoi.
-
-### 4. Timeline e tracce (in basso)
-
-**Le tracce non hanno un numero fisso.** Un progetto nuovo ne ha una video e una audio; le
-altre si aggiungono con **`+ video`** / **`+ audio`** nella riga in fondo alla colonna dei
-nomi (accanto c'è il conteggio: `3 video · 1 audio`). Gli stessi pulsanti sono anche nella
-barra in alto.
-
-Ogni traccia ha la sua testata:
-
-| Comando | Cosa fa |
-|---|---|
-| **nome** | doppio clic per rinominarla (`riprese`, `titoli`, `musica`…) |
-| **▲ ▼** | sposta la traccia. Per il video l'ordine **è** la sovrapposizione: più in alto = disegnata sopra |
-| **👁 / 🔊** | nasconde il video / silenzia l'audio |
-| **S** | *solo*: isola la traccia, le altre dello stesso tipo escono dal render |
-| **🔒** | blocca: protegge le clip da spostamenti, tagli, effetti ed eliminazioni. È anche l'unico modo di sbloccarla |
-| **✕** | elimina la traccia (chiede conferma se contiene clip) |
-| **cursore** | volume della traccia |
-
-Una traccia esclusa dal render si vede subito: corsia sbiadita e nome barrato. Una bloccata
-ha il tratteggio diagonale.
-
-Sulle clip:
-
-- **trascina** per spostarle, anche **da una traccia all'altra**;
-- **trascina i bordi** per tagliarle;
-- aggancio automatico ai bordi delle altre clip e alla testina;
-- le clip video mostrano i fotogrammi, quelle audio la forma d'onda.
-
-Sotto la barra di trasporto ci sono due cursori: **zoom** (scala dei tempi) e **tracce**
-(altezza). Abbassa l'altezza per tenerne una ventina sott'occhio: sotto una certa soglia
-sparisce solo il cursore del volume, i pulsanti restano tutti.
-
-> **Le tracce video servono a sovrapporre.** Un titolo sulla stessa traccia di una ripresa
-> ci sta, ma per un PiP, un logo o due riprese sovrapposte a piacere serve una traccia in più.
-
-### 5. Proprietà (pannello destro, scheda *proprietà*)
-
-Con una clip selezionata: nome, inizio, durata, attacco, inquadratura, velocità e reverse,
-dissolvenze, transizione in uscita, posizione/scala/rotazione/opacità, audio (volume in dB,
-pan, dissolvenze), effetti.
-
-Il pulsante **◆** accanto a un parametro lo rende **animato**: compare l'editor dei keyframe,
-con i tempi relativi all'inizio della clip.
-
-Senza selezione mostra il progetto: risoluzione, fps, sfondo, normalizzazione EBU R128 del
-mix ed effetti sul master.
-
-### 6. Assistente (pannello destro, scheda *assistente*)
-
-Chiedi una modifica in italiano e viene fatta sul progetto:
-
-> «togli i primi 2 secondi della prima clip»
-> «metti una dissolvenza tra le due riprese»
-> «rendi il video più cinematografico»
-> «sposta la musica su una traccia sua e abbassala di 6 dB»
-
-Gli strumenti che usa **sono le stesse operazioni dei pulsanti**: quello che fa compare in
-timeline e lo annulli con Ctrl+Z, esattamente come una tua modifica. Sotto ogni risposta
-vedi la lista di cosa ha toccato. **azzera** ricomincia la conversazione.
-
-Richiede `ANTHROPIC_API_KEY` (vedi [Installazione](#installazione)).
-
-### 7. Esportare
-
-**esporta** apre la finestra di render: file di destinazione, qualità
-(`bozza` / `media` / `alta` / `massima`), codec (H.264, HEVC, AV1, VP9) ed eventualmente solo
-una porzione della timeline. L'estensione decide il contenitore: `.mp4` `.mov` `.mkv`
-`.webm` `.gif` `.mp3` `.wav`. La barra mostra l'avanzamento reale di ffmpeg.
-
-Il render finale usa **sempre gli originali**, mai i proxy.
+**7. Export.** Destination file, quality (`draft` / `medium` / `high` / `max`), codec (H.264,
+HEVC, AV1, VP9), optionally just a portion of the timeline. The extension picks the container:
+`.mp4` `.mov` `.mkv` `.webm` `.gif` `.mp3` `.wav`. The progress bar is ffmpeg's real progress.
+The final render **always uses the originals**, never the proxies.
 
 ---
 
-## Scorciatoie da tastiera
+## Keyboard shortcuts
 
-| Tasto | Azione |
+| Key | Action |
 |---|---|
-| `spazio` | play / pausa |
-| `←` `→` | un fotogramma (con `shift`: un secondo) |
-| `Home` / `Fine` | inizio / fine |
-| `S` | taglia alla testina |
-| `Canc` | elimina la clip (con `shift`: chiude il buco) |
-| `Ctrl+Z` / `Ctrl+Y` | annulla / ripeti |
-| `+` `-` | zoom della timeline |
+| `space` | play / pause |
+| `←` `→` | one frame (with `shift`: one second) |
+| `Home` / `End` | start / end |
+| `S` | split at the playhead |
+| `Del` | delete the clip (with `shift`: close the gap) |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `+` `-` | timeline zoom |
 
 ---
 
-## Riga di comando
+## Command line
 
-Tutto quello che fa l'interfaccia si fa anche da terminale, sullo stesso file di progetto.
+Everything the interface does is also available in the terminal, on the same project file.
 
 ```bash
-vedit new progetto.json --preset 1080p
-vedit import progetto.json riprese/*.mp4 musica.mp3
-vedit info progetto.json                 # media e timeline con gli id
-vedit add progetto.json m1a2b3c4 --duration 8
-vedit proxy progetto.json                # proxy 540p: anteprime molto più rapide
-vedit frame progetto.json 12.5 controllo.jpg
-vedit normalize progetto.json --lufs -14
-vedit render progetto.json finale.mp4 --quality high
-vedit effects video                      # catalogo effetti e parametri
-vedit doctor                             # ffmpeg, encoder, filtri
-vedit ui                                 # interfaccia web
+vedit new project.json --preset 1080p
+vedit import project.json shots/*.mp4 music.mp3
+vedit info project.json                  # media and timeline with ids
+vedit add project.json m1a2b3c4 --duration 8
+vedit proxy project.json                 # 540p proxies: much faster previews
+vedit frame project.json 12.5 check.jpg
+vedit normalize project.json --lufs -14
+vedit render project.json final.mp4 --quality high
+vedit effects video                      # effect catalogue with parameters
+vedit doctor                             # ffmpeg, encoders, filters
+vedit install-ffmpeg                     # download ffmpeg + ffprobe into ~/.vedit/bin
+vedit ui                                 # web interface
 ```
 
-Preset di formato: `1080p`, `1080p60`, `4k`, `720p`, `vertical` (9:16), `vertical60`, `square`.
+---
+
+## What it can do
+
+**Editing** — cut, split, trim, move (across tracks too), ripple delete, close gaps, any number
+of video and audio tracks with ordering, solo and lock, bin folders, undo/redo.
+
+**Transitions** — dissolve, wipe in four directions, slide in four directions, iris. The next
+clip is pulled in and overlapped automatically; audio always crossfades.
+
+**Speed** — 0.01x to 100x with pitch-correct audio (chained `atempo`), reverse, motion blur or
+frame interpolation for slow motion.
+
+**Colour** — brightness, contrast, saturation, gamma (all animatable), shadow/midtone/highlight
+balance, temperature, curves, `.cube` LUTs, `match_color` between shots, `color_scopes`.
+
+**Composition** — position, scale, rotation and opacity per clip, all animatable with keyframes
+and easing; PiP, graphic overlays, text with box/outline/shadow, chroma key, crop, mirror,
+pixelate, vignette, grain, glow, stabilisation.
+
+**Audio** — gain in dB (animatable), pan, fades, EQ, compressor, limiter, noise reduction, gate,
+reverb, echo, pitch shift, dynamic normalisation, and two-pass EBU R128 normalisation of the
+mix; `duck_music`, `jl_cut`, `detach_audio`.
+
+**Footage and rhythm** — `plan_edit` (segment and score the takes), `inspect_footage`,
+`music_beats` (BPM, bars, energy profile, cut grid), `check_cuts`, `smooth_cuts`,
+`preview_grid`, `verify_edit`.
+
+**Speech and subject** *(extras)* — `transcribe`, `make_captions`, `tighten_speech`,
+`censor_speech`; `detect_subjects`, `track_mask`, `auto_reframe`.
 
 ---
 
-## Uso da agente (MCP)
+## Keyframes
 
-Il file `.mcp.json` è già pronto: aprendo Claude Code in questa cartella il server `vedit`
-viene proposto al primo avvio (va approvato una volta). Altrove:
-
-```bash
-claude mcp add vedit -- vedit-mcp
-```
-
-Per gli altri client (Cursor, Codex, VS Code) la configurazione equivalente e il flusso
-consigliato degli strumenti stanno in [`AGENTS.md`](AGENTS.md).
-
-42 strumenti: creazione progetto, import, taglio/split/trim, tracce (aggiungere,
-riordinare, solo, blocco), velocità e reverse, transform con keyframe, effetti video e audio,
-dissolvenze incrociate, normalizzazione EBU R128, render, e `preview_frame` che **restituisce
-l'immagine vera** del fotogramma — così l'agente vede quello che ha montato invece di
-indovinarlo.
-
-> **Un progetto alla volta per file.** Interfaccia e server MCP salvano da soli dopo ogni
-> modifica: se tieni lo stesso `.json` aperto in tutti e due contemporaneamente, l'ultimo che
-> salva vince. Lavora su uno per volta.
-
----
-
-## Cosa sa fare
-
-**Montaggio** — taglio, split, trim, spostamento anche tra tracce, ripple delete, chiusura
-buchi, tracce video e audio in numero libero con ordine, solo e blocco, cartelle nel bin,
-undo/redo.
-
-**Transizioni** — dissolvenza, tendina nelle quattro direzioni, scorrimento nelle quattro
-direzioni, iris. La clip successiva viene accostata e sovrapposta in automatico; l'audio
-incrocia sempre in dissolvenza.
-
-**Velocità** — da 0.01x a 100x con audio in tempo (`atempo` a catena), reverse, motion blur o
-interpolazione di frame per lo slow motion.
-
-**Colore** — luminosità, contrasto, saturazione, gamma (animabili), bilanciamento
-ombre/mezzitoni/alteluci, temperatura, curve, LUT `.cube`.
-
-**Composizione** — posizione, scala, rotazione, opacità per clip, tutte animabili con keyframe
-ed easing; PiP, overlay grafici, testi con box/bordo/ombra, chroma key, ritaglio, specchio,
-pixelate, vignettatura, grana, glow, stabilizzazione.
-
-**Audio** — guadagno in dB (animabile), pan, dissolvenze, equalizzatore, compressore, limiter,
-riduzione rumore, gate, riverbero, eco, pitch shift, normalizzazione dinamica e
-normalizzazione EBU R128 a due passaggi sul mix.
-
----
-
-## Keyframe
-
-Ogni parametro animabile accetta, al posto di un numero, un blocco keyframe:
+Any animatable parameter accepts a keyframe block instead of a number:
 
 ```json
 {"kf": [{"t": 0, "v": 1.0, "ease": "ease_in_out"}, {"t": 3, "v": 1.4}]}
 ```
 
-`t` è il tempo **relativo all'inizio della clip**. Easing: `linear`, `hold`, `ease_in`,
-`ease_out`, `ease_in_out` e le varianti `_cubic`.
+`t` is **relative to the start of the clip**. Easing: `linear`, `hold`, `ease_in`, `ease_out`,
+`ease_in_out` and the `_cubic` variants.
 
-I keyframe diventano espressioni ffmpeg valutate frame per frame: l'animazione non costa un
-passaggio di render in più.
+Keyframes become ffmpeg expressions evaluated frame by frame, so animation does not cost an
+extra render pass.
 
 ---
 
-## Come è fatto
+## How it works
 
 ```
 backend/vedit/
-  model.py       documento di progetto (dataclass <-> JSON)
-  keyframes.py   keyframe -> espressioni ffmpeg
-  effects.py     registro effetti: parametri, validazione, filtri
-  presets.py     look, catene audio e transizioni già tarate
-  graph.py       timeline -> filter_complex
-  render.py      esecuzione, progresso, analisi (loudness, stabilizzazione)
-  proxy.py       proxy, forme d'onda, miniature
-  store.py       operazioni di editing + undo/redo + salvataggio
-  chat.py        assistente: gli strumenti sono le operazioni di store
-  mcp_server.py  strumenti MCP
-  api.py         API REST/WebSocket per la UI
-  cli.py         riga di comando
-frontend/        interfaccia web (React + Vite)
-tests/           test, inclusi render reali di ogni effetto
+  model.py       project document (dataclass ↔ JSON)
+  keyframes.py   keyframes → ffmpeg expressions
+  effects.py     effect registry: parameters, validation, filters
+  presets.py     pre-tuned looks, audio chains and transitions
+  graph.py       timeline → filter_complex
+  render.py      execution, progress, analysis (loudness, stabilisation)
+  proxy.py       proxies, waveforms, thumbnails
+  store.py       editing operations + undo/redo + atomic save
+  chat.py        assistant: its tools are Store's operations
+  mcp_server.py  MCP tools
+  api.py         REST/WebSocket API for the UI
+  cli.py         command line
+frontend/        web interface (React + Vite)
+tests/           tests, including real renders of every effect
 ```
 
-**Un solo punto di verità.** Interfaccia, assistente e agente MCP chiamano tutti i metodi di
-`Store`. Non esiste una strada privilegiata per modificare il progetto, quindi non esiste il
-caso "funziona da qui ma non da lì".
+**One source of truth.** The interface, the assistant and the MCP agent all call methods on
+`Store`. There is no privileged path for modifying the project, so there is no "works from
+here, breaks from there". Add an operation to `store.py` first, then expose it where needed —
+never write into the document from `api.py`, `mcp_server.py` or `cli.py`.
 
-Note tecniche che spiegano le scelte meno ovvie:
+The less obvious choices, and why:
 
-- **Composizione**: canvas + un `overlay` per clip. Regge multi-traccia, PiP e dissolvenze
-  senza casi particolari.
-- **Posizionamento**: `tpad` con frame trasparenti invece di spostare i PTS, così `overlay`
-  non resta in attesa di frame.
-- **Ordine di disegno**: le tracce video si sovrappongono nell'ordine della lista. Dentro una
-  traccia, la clip che inizia prima sta sopra (così la sua transizione in uscita scopre quella
-  dopo); titoli e colori pieni fanno eccezione e stanno sempre sopra i media.
-- **Anteprima**: `slice_project` ritaglia la porzione richiesta, quindi rendere il secondo 300
-  non costa più che rendere il secondo 3. Le clip tagliate conservano il proprio tempo
-  d'origine, così una dissolvenza inquadrata a metà mostra il fotogramma giusto — c'è un test
-  che confronta anteprima e render finale.
-- **Transizioni**: sfruttano l'ordine di disegno. Tendine e iris cancellano pixel della clip in
-  uscita con una maschera `geq` sull'alpha; lo scorrimento aggiunge un termine alle espressioni
-  `x`/`y` dell'overlay. Nessun secondo ramo del grafo, nessun costo di composizione in più.
-- **Strisce di fotogrammi**: una sola immagine per media (`tile`), posizionata via CSS in base
-  ad attacco, velocità e zoom. Zoomare la timeline non genera nessuna richiesta.
-- **Cache di anteprima**: ogni fotogramma e ogni segmento vengono scritti su un file
-  temporaneo e spostati a destinazione solo a lavoro finito. Senza, il player riceverebbe un
-  mp4 ancora senza atomo `moov` e la riproduzione non partirebbe.
-- **Salvataggio**: stessa idea, `os.replace` atomico. Un'interruzione a metà non può lasciare
-  un progetto troncato.
-- **Filtergraph su file** (`-filter_complex_script`): le timeline lunghe superano il limite di
-  32k caratteri della riga di comando di Windows.
+- **Composition**: a canvas plus one `overlay` per clip. Handles multi-track, PiP and
+  dissolves with no special cases.
+- **Placement**: `tpad` with transparent frames instead of shifting PTS, so `overlay` never
+  sits waiting for frames.
+- **Draw order**: video tracks stack in list order. Inside a track the clip that starts first
+  is on top (so its outgoing transition reveals the next one); titles and solid colours are the
+  exception and always sit above media.
+- **Preview**: `slice_project` cuts out the requested portion, so rendering second 300 costs no
+  more than second 3. Sliced clips keep their original timing, so a dissolve framed halfway
+  shows the right frame — there is a test comparing preview against final render.
+- **Transitions**: they exploit the draw order. Wipes and iris erase pixels of the outgoing
+  clip with a `geq` alpha mask; slides add a term to the overlay's `x`/`y` expressions. No
+  second branch in the graph, no extra composition cost.
+- **Filmstrips**: one image per media (`tile`), positioned with CSS from in-point, speed and
+  zoom. Zooming the timeline issues no requests at all.
+- **Preview cache**: every frame and segment is written to a temporary file and moved into
+  place only when finished. Otherwise the player would get an mp4 with no `moov` atom yet and
+  playback would not start.
+- **Saving**: same idea, atomic `os.replace`. An interruption cannot leave a truncated project.
+- **Filtergraph from file** (`-filter_complex_script`): long timelines blow past Windows'
+  32k command-line limit.
 
 ---
 
-## Test
+## Tests
 
 ```bash
-pytest                  # tutto, render reali inclusi (~50s)
-pytest -m "not slow"    # solo logica, senza ffmpeg
+pytest                  # everything, real renders included (3–5 min)
+pytest -m "not slow"    # logic and API, no renders (2–3 min)
 
 cd frontend
-node test-util.mjs                       # funzioni pure della UI
-npm run build && node smoke.mjs          # monta la UI compilata in jsdom
+node test-util.mjs                       # pure UI functions
+npm run build && node smoke.mjs          # mounts the built UI in jsdom
 ```
 
-78 test Python: keyframe, operazioni di editing, compilazione del grafo, un render reale per
-ognuno dei 28 effetti e delle 10 transizioni, corrispondenza tra anteprima e render finale,
-strumenti MCP, API della UI, riga di comando.
+**ffmpeg is needed even by the fast tests**: `tests/conftest.py` generates synthetic sources
+with it, and half the suite reads media with ffprobe. The `slow` marker separates real
+*renders*, not the use of ffmpeg.
+
+The suite covers keyframes, editing operations, graph compilation, a real render for each
+effect and each transition, preview-versus-final-render agreement, MCP tools, the UI API and
+the command line. `tests/test_dipendenze.py` reads the backend's imports and requires each one
+to be declared in `pyproject.toml`, so a package that happens to sit on a developer's machine
+cannot silently go missing from the wheel.
 
 ---
 
-## Limiti noti
+## Known limits
 
-- L'opacità animata e le tendine usano `geq` (valutazione per pixel): funzionano ma rallentano
-  il render. Dissolvenze e scorrimenti non hanno questo costo.
-- La scala animata passa da `zoompan`: sotto 0.25x il valore viene limitato.
-- La riproduzione in anteprima è a segmenti: il primo è da attendere, i successivi vengono
-  preparati mentre guardi.
-- I file trascinati dal desktop vengono copiati (il browser non passa il percorso di origine):
-  per file grandi conviene il pulsante di import.
-- Il riquadro di trasformazione non modifica i parametri animati: in quel caso si agisce sui
-  keyframe.
-- Se due processi tengono aperto lo stesso `.json` (per esempio interfaccia e server MCP), il
-  salvataggio automatico dell'uno può sovrascrivere il lavoro dell'altro. Non c'è ancora un
-  lock sul file di progetto.
+- Animated opacity and wipes use `geq` (per-pixel evaluation): they work, but they slow the
+  render down. Dissolves and slides do not carry that cost.
+- Animated scale goes through `zoompan`: below 0.25x the value is clamped.
+- Preview playback is segmented: the first segment has to be waited for, the following ones are
+  prepared while you watch.
+- Files dragged from the desktop are copied (the browser does not pass the source path); for
+  large files use the import button.
+- The transform box does not edit animated parameters — for those, use the keyframes.
+- If two processes hold the same `.json` open, one autosave can overwrite the other's work.
+  There is no project-file lock yet.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening one:
+
+- read [`AGENTS.md`](AGENTS.md) — it is the contract for humans and coding agents alike;
+- code, comments and user-facing messages are **in Italian**, like the rest of the project
+  (this README and the docs are the English front door);
+- every new behaviour comes with a test; real renders go behind the `slow` marker;
+- new effect → `effects.py`; new MCP tool → a method in `store.py`, a wrapper in
+  `mcp_server.py`, a test in `tests/test_mcp.py`; UI change → `npm run build`;
+- before claiming it works: `pytest -m "not slow"` plus the part of `slow` it touches, and
+  `cd frontend && npm test` if you changed the UI.
+
+No new dependencies without a reason: the core stands on ffmpeg, the standard library, `numpy`
+and Pillow.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
