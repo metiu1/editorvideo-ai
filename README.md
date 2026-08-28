@@ -17,7 +17,7 @@ edit by hand, a chat assistant inside the editor, and an **MCP server** so a cod
 claude mcp add vedit -- uvx vedit-mcp     # that is the whole install
 ```
 
-![vedit demo](https://raw.githubusercontent.com/metiu1/editorvideo-ai/main/docs/vedit-demo.gif)
+![vedit demo](docs/vedit-demo.gif)
 
 [![ci](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/vedit-mcp.svg)](https://pypi.org/project/vedit-mcp/)

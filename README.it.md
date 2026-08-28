@@ -6,7 +6,7 @@ Editor video non lineare con **tre modi di guidarlo sullo stesso motore**: un'in
 web per montare a mano, un assistente in chat dentro l'editor, e un server MCP per farci
 lavorare un agente da fuori.
 
-![vedit demo](https://raw.githubusercontent.com/metiu1/editorvideo-ai/main/docs/vedit-demo.gif)
+![vedit demo](docs/vedit-demo.gif)
 
 Il progetto è un documento JSON. Il render è una funzione pura di quel documento, compilata
 in un unico `filter_complex` di ffmpeg: niente stato nascosto, lo stesso progetto produce
