@@ -1,54 +1,75 @@
-<h1 align="center">vedit — the video editor an AI agent can actually drive</h1>
+<h1 align="center">vedit — tell an AI to edit your video, and watch it happen</h1>
 
 <p align="center">
-  <strong>A real non-linear video editor with a web timeline, a chat assistant and an MCP server on one deterministic ffmpeg engine.</strong><br/>
-  Let Claude Code, Cursor or Codex cut your video while you watch the timeline move.
+  <strong>A normal video editor — timeline, clips, cuts, transitions — except an AI can use it for you.</strong><br/>
+  You say what you want in plain words. It does the editing while you watch the clips move, and you can grab the mouse and fix anything at any point.
 </p>
 
 <p align="center">
   <a href="https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml"><img src="https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
   <a href="https://pypi.org/project/vedit-mcp/"><img src="https://img.shields.io/pypi/v/vedit-mcp.svg?style=flat-square" alt="PyPI"/></a>
   <a href="https://pypi.org/project/vedit-mcp/"><img src="https://img.shields.io/pypi/pyversions/vedit-mcp.svg?style=flat-square" alt="Python versions"/></a>
-  <img src="https://img.shields.io/badge/MCP%20tools-77-blueviolet?style=flat-square" alt="77 MCP tools"/>
+  <img src="https://img.shields.io/badge/AI%20tools-77-blueviolet?style=flat-square" alt="77 AI tools"/>
+  <img src="https://img.shields.io/badge/runs-100%25%20local-brightgreen?style=flat-square" alt="Runs locally"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"/>
 </p>
 
 <p align="center">
-  <img src="docs/vedit-demo.gif" alt="vedit demo — timeline, chat assistant and MCP agent editing the same project" width="820"/>
+  <img src="docs/vedit-demo.gif" alt="vedit demo — an AI assistant editing clips on the timeline while the user watches" width="820"/>
 </p>
+
+---
+
+## What it is
+
+vedit is a video editor. The ordinary kind: a timeline, video and audio tracks, clips you
+drag, cut, speed up, colour-grade and fade into each other.
+
+The difference is that **everything you can do with the mouse, an AI can also do on command** —
+because the buttons and the AI call the exact same 77 operations. Nothing is AI-only, nothing
+is mouse-only.
+
+So instead of half an hour of trimming, you type:
+
+> *"Cut the first 40 seconds, remove the pauses where I say nothing, speed the screen recording
+> up 2×, cut the b-roll on the beat of the music, and burn in subtitles."*
+
+and the clips rearrange themselves on the timeline in front of you. If it puts a cut in the
+wrong place, you drag that one clip and keep going. It is not a black box that hands you a
+finished file you cannot touch — it is your editing software, with a second pair of hands.
+
+## Who it is for
+
+- **Anyone who edits talking-head, tutorial or gameplay video** and is tired of spending
+  two hours on decisions that were never creative: finding the good take, cutting dead air,
+  matching cuts to music, redoing the same volume curve.
+- **People who already work with Claude Code, Cursor or Codex.** One line of setup and your
+  coding agent can edit video, the same way it edits files.
+- **Developers who want video editing in a script or a pipeline** — the whole project is a
+  JSON document, so it can be generated, diffed and version-controlled like source code.
+
+## Why use it instead of the alternatives
+
+| | |
+|---|---|
+| **vs. "AI video generators"** | They give you a finished clip you cannot fix. vedit gives you the project, every clip, every knob — and the AI only moves the same controls you would have moved. |
+| **vs. Premiere / DaVinci / CapCut** | Those give you every control and none of your time back. Here the boring 80 % is delegated and the last 20 % stays in your hands. |
+| **vs. an ffmpeg script** | Same speed and precision, but you can actually see what happened, scrub it, and undo it. |
+| **Cost and privacy** | Runs on your machine. No subscription, no upload, no watermark, no render queue. MIT licensed. |
 
 ```bash
 claude mcp add vedit -- uvx vedit-mcp     # that is the whole install
 ```
-
----
-
-### Editing eats your time. This gives it back.
-
-Cutting a two-minute video is twenty minutes of work and two hours of dragging rectangles:
-finding the good take inside forty minutes of footage, trimming frame by frame, matching the
-cuts to the music, tweaking the same volume curve for the tenth time. None of that is a
-creative decision. All of it is time.
-
-vedit is a real non-linear video editor whose entire project is a JSON document, and whose
-render is a pure function of that document compiled into a single ffmpeg `filter_complex`.
-That one design choice is what lets you drive it **three ways at once** — a web timeline you
-edit by hand, a chat assistant inside the editor, and an **MCP server** so a coding agent
-(Claude Code, Cursor, Codex…) can cut the video for you while you watch the timeline move.
-
-Python + React. Windows, macOS and Linux. MIT.
 
 > 🇮🇹 Questo README in italiano: [README.it.md](README.it.md). Code, comments and UI messages
 > are in Italian — that is the project convention.
 
 ---
 
-## Why this exists
+## What makes it work
 
-Most "AI video" tools generate a video for you and give you back a file you cannot fix.
-An editor gives you every knob and none of the time back.
-
-vedit sits in the middle, and it does so honestly:
+An AI that cannot see the edit produces garbage. These are the parts that make the
+difference between a demo and something you would actually cut a video with:
 
 | | |
 |---|---|
