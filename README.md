@@ -1,8 +1,27 @@
-# vedit
+<h1 align="center">vedit — the video editor an AI agent can actually drive</h1>
 
-**A non-linear video editor an AI agent can actually drive** — web timeline, chat assistant
-and MCP server on one deterministic ffmpeg engine. Python + React, Windows / macOS / Linux,
-MIT.
+<p align="center">
+  <strong>A real non-linear video editor with a web timeline, a chat assistant and an MCP server on one deterministic ffmpeg engine.</strong><br/>
+  Let Claude Code, Cursor or Codex cut your video while you watch the timeline move.
+</p>
+
+<p align="center">
+  <a href="https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml"><img src="https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://pypi.org/project/vedit-mcp/"><img src="https://img.shields.io/pypi/v/vedit-mcp.svg?style=flat-square" alt="PyPI"/></a>
+  <a href="https://pypi.org/project/vedit-mcp/"><img src="https://img.shields.io/pypi/pyversions/vedit-mcp.svg?style=flat-square" alt="Python versions"/></a>
+  <img src="https://img.shields.io/badge/MCP%20tools-77-blueviolet?style=flat-square" alt="77 MCP tools"/>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"/>
+</p>
+
+<p align="center">
+  <img src="docs/vedit-demo.gif" alt="vedit demo — timeline, chat assistant and MCP agent editing the same project" width="820"/>
+</p>
+
+```bash
+claude mcp add vedit -- uvx vedit-mcp     # that is the whole install
+```
+
+---
 
 ### Editing eats your time. This gives it back.
 
@@ -17,16 +36,7 @@ That one design choice is what lets you drive it **three ways at once** — a we
 edit by hand, a chat assistant inside the editor, and an **MCP server** so a coding agent
 (Claude Code, Cursor, Codex…) can cut the video for you while you watch the timeline move.
 
-```bash
-claude mcp add vedit -- uvx vedit-mcp     # that is the whole install
-```
-
-![vedit demo](docs/vedit-demo.gif)
-
-[![ci](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/metiu1/editorvideo-ai/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/vedit-mcp.svg)](https://pypi.org/project/vedit-mcp/)
-[![Python](https://img.shields.io/pypi/pyversions/vedit-mcp.svg)](https://pypi.org/project/vedit-mcp/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+Python + React. Windows, macOS and Linux. MIT.
 
 > 🇮🇹 Questo README in italiano: [README.it.md](README.it.md). Code, comments and UI messages
 > are in Italian — that is the project convention.
